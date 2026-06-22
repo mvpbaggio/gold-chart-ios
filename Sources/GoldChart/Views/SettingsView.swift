@@ -2,10 +2,6 @@ import SwiftUI
 
 @available(iOS 14.0, *)
 struct SettingsView: View {
-    @State private var apiKey = UserDefaults.standard.string(forKey: "gold_api_key") ?? ""
-    @State private var showSaveAlert = false
-    @State private var alertMessage = ""
-    
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -32,53 +28,72 @@ struct SettingsView: View {
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.cardBorder, lineWidth: 1))
                 .padding(.horizontal, 12)
                 
-                // API设置
-                settingsSection("数据源设置") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Gold API Key（可选）")
-                            .font(.system(size: 13))
-                            .foregroundColor(AppColors.textSecondary)
+                // 数据源信息
+                settingsSection("数据源") {
+                    VStack(spacing: 8) {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AppColors.green)
+                                .font(.system(size: 14))
+                            Text("黄金/白银")
+                                .font(.system(size: 13))
+                                .foregroundColor(AppColors.textSecondary)
+                            Spacer()
+                            Text("aurumrates.com")
+                                .font(.system(size: 13))
+                                .foregroundColor(AppColors.textPrimary)
+                        }
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill")
+                                .foregroundColor(AppColors.green)
+                                .font(.system(size: 14))
+                            Text("A股行情")
+                                .font(.system(size: 13))
+                                .foregroundColor(AppColors.textSecondary)
+                            Spacer()
+                            Text("新浪财经")
+                                .font(.system(size: 13))
+                                .foregroundColor(AppColors.textPrimary)
+                        }
                         
-                        SecureField("输入API Key", text: $apiKey)
-                            .foregroundColor(AppColors.textPrimary)
-                            .accentColor(AppColors.gold)
-                            .padding(10)
-                            .background(AppColors.background)
-                            .cornerRadius(6)
-                            .overlay(RoundedRectangle(cornerRadius: 6).stroke(AppColors.cardBorder, lineWidth: 1))
-                        
-                        Text("留空时使用模拟数据。可从 gold-api.com 免费获取。")
+                        Text("所有数据源均为免费开放接口，无需配置")
                             .font(.system(size: 11))
                             .foregroundColor(AppColors.textTertiary)
-                        
-                        Button(action: saveAPIKey) {
-                            Text("保存")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundColor(AppColors.background)
-                                .padding(.horizontal, 24)
-                                .padding(.vertical, 8)
-                                .background(AppColors.gold)
-                                .cornerRadius(6)
-                        }
+                            .padding(.top, 4)
                     }
                 }
                 
                 // 关于
                 settingsSection("关于") {
                     VStack(spacing: 6) {
-                        settingRow("数据来源", value: "Gold-API / 新浪财经")
+                        settingRow("版本", value: Constants.version)
                         settingRow("图表引擎", value: "DGCharts")
                         settingRow("适配系统", value: "iOS 14.0+")
                         settingRow("安装方式", value: "TrollStore")
                     }
                 }
                 
+                // 说明
+                settingsSection("使用说明") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("• 底部切换 行情/信号/A股/设置")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppColors.textSecondary)
+                        Text("• 顶部切换 黄金/白银")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppColors.textSecondary)
+                        Text("• 横向滚动选择周期和指标")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppColors.textSecondary)
+                        Text("• aurumrates.com 限制100次/小时")
+                            .font(.system(size: 12))
+                            .foregroundColor(AppColors.textTertiary)
+                    }
+                }
+                
                 Spacer()
             }
             .padding(.vertical, 8)
-        }
-        .alert(isPresented: $showSaveAlert) {
-            Alert(title: Text("提示"), message: Text(alertMessage), dismissButton: .default(Text("好")))
         }
     }
     
@@ -108,14 +123,5 @@ struct SettingsView: View {
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textPrimary)
         }
-    }
-    
-    private func saveAPIKey() {
-        UserDefaults.standard.set(apiKey, forKey: "gold_api_key")
-        alertMessage = "API Key 已保存"
-        showSaveAlert = true
-        
-        // 实际调用时更新API配置
-        // 注：这里需要修改Constants，后续版本可优化
     }
 }

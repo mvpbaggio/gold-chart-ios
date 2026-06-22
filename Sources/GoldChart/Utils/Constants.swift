@@ -49,16 +49,13 @@ extension Color {
 
 // MARK: - API 配置
 struct API {
-    static let goldBase = "https://www.gold-api.com"
-    static let goldApiKey = ""  // 用户自行填入
+    // 黄金/白银数据：aurumrates.com（免费，无需Key）
+    static let goldBase = "https://aurumrates.com/api/chart"
     
-    // sina
+    // A股：新浪财经
     static let sinaSearch = "https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15&key="
     static let sinaQuote = "https://hq.sinajs.cn/list="
     static let sinaHistory = "https://web.ifzq.gtimg.cn/appstock/app/day/query?"
-    
-    // 降级/模拟数据
-    static let useMockData = true  // 无API Key时使用模拟数据
 }
 
 // MARK: - 其他常量
