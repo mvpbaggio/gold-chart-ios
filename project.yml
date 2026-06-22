@@ -20,6 +20,7 @@ targets:
     platform: iOS
     sources:
       - path: Sources/GoldChart
+      - path: GoldChartApp/Assets.xcassets
     settings:
       base:
         INFOPLIST_FILE: GoldChartApp/Info.plist
