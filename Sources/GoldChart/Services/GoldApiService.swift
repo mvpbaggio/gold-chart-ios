@@ -54,29 +54,34 @@ class GoldApiService {
         guard let result = (chart["result"] as? [[String: Any]])?.first,
               let timestamps = result["timestamp"] as? [TimeInterval],
               let indicators = result["indicators"] as? [String: Any],
-              let quote = (indicators["quote"] as? [[String: Any]])?.first,
-              let opens = quote["open"] as? [Double],
-              let highs = quote["high"] as? [Double],
-              let lows = quote["low"] as? [Double],
-              let closes = quote["close"] as? [Double] else {
+              let quote = (indicators["quote"] as? [[String: Any]])?.first else {
             throw APIError.noData
         }
         
-        let volumes = quote["volume"] as? [Double] ?? Array(repeating: 0, count: opens.count)
+        // Yahoo可能在非交易时段返回null值，用compactDoubles过滤
+        let rawOpens = quote["open"] as? [Any] ?? []
+        let rawHighs = quote["high"] as? [Any] ?? []
+        let rawLows = quote["low"] as? [Any] ?? []
+        let rawCloses = quote["close"] as? [Any] ?? []
+        let rawVolumes = quote["volume"] as? [Any] ?? []
         
-        let count = min(timestamps.count, opens.count, highs.count, lows.count, closes.count, volumes.count)
+        let count = min(timestamps.count, rawOpens.count, rawHighs.count, rawLows.count, rawCloses.count, rawVolumes.count)
         
         var klines: [Kline] = []
         for i in 0..<count {
-            guard opens[i] > 0, highs[i] > 0, lows[i] > 0, closes[i] > 0 else { continue }
+            guard let open = rawOpens[i] as? Double, open > 0,
+                  let high = rawHighs[i] as? Double, high > 0,
+                  let low = rawLows[i] as? Double, low > 0,
+                  let close = rawCloses[i] as? Double, close > 0 else { continue }
+            let volume = (rawVolumes[i] as? Double) ?? 0
             let ts = timestamps[i] * 1000  // 秒→毫秒
             klines.append(Kline(
                 timestamp: ts,
-                open: opens[i],
-                high: highs[i],
-                low: lows[i],
-                close: closes[i],
-                volume: volumes[i]
+                open: open,
+                high: high,
+                low: low,
+                close: close,
+                volume: volume
             ))
         }
         
