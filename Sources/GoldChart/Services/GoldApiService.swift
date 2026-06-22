@@ -89,13 +89,6 @@ class GoldApiService {
         let klines = buildKlines(ts: timestamps, open: quote["open"], high: quote["high"], low: quote["low"], close: quote["close"], volume: quote["volume"])
         if klines.isEmpty { throw APIError.noData }
         
-        // 按时间正序排列
-        klines.sort { $0.timestamp < $1.timestamp }
-        
-        if klines.isEmpty {
-            throw APIError.noData
-        }
-        
         return klines
     }
     
