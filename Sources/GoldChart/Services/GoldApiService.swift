@@ -58,32 +58,36 @@ class GoldApiService {
             throw APIError.noData
         }
         
-        // Yahoo可能在非交易时段返回null值，用compactDoubles过滤
-        let rawOpens = quote["open"] as? [Any] ?? []
-        let rawHighs = quote["high"] as? [Any] ?? []
-        let rawLows = quote["low"] as? [Any] ?? []
-        let rawCloses = quote["close"] as? [Any] ?? []
-        let rawVolumes = quote["volume"] as? [Any] ?? []
-        
-        let count = min(timestamps.count, rawOpens.count, rawHighs.count, rawLows.count, rawCloses.count, rawVolumes.count)
-        
-        var klines: [Kline] = []
-        for i in 0..<count {
-            guard let open = rawOpens[i] as? Double, open > 0,
-                  let high = rawHighs[i] as? Double, high > 0,
-                  let low = rawLows[i] as? Double, low > 0,
-                  let close = rawCloses[i] as? Double, close > 0 else { continue }
-            let volume = (rawVolumes[i] as? Double) ?? 0
-            let ts = timestamps[i] * 1000  // 秒→毫秒
-            klines.append(Kline(
-                timestamp: ts,
-                open: open,
-                high: high,
-                low: low,
-                close: close,
-                volume: volume
-            ))
+        // Yahoo在某些时段返回null，Swift的as? [Double]会整个失败
+        // 改用NSArray逐元素同步提取 + timestamp对齐
+        func buildKlines(ts: [TimeInterval], open: Any?, high: Any?, low: Any?, close: Any?, volume: Any?) -> [Kline] {
+            guard let opensArr = open as? NSArray,
+                  let highsArr = high as? NSArray,
+                  let lowsArr = low as? NSArray,
+                  let closesArr = close as? NSArray,
+                  let volsArr = volume as? NSArray else { return [] }
+            let count = min(ts.count, opensArr.count, highsArr.count, lowsArr.count, closesArr.count, volsArr.count)
+            var klines: [Kline] = []
+            for i in 0..<count {
+                guard let o = opensArr[i] as? NSNumber, o.doubleValue > 0,
+                      let h = highsArr[i] as? NSNumber, h.doubleValue > 0,
+                      let l = lowsArr[i] as? NSNumber, l.doubleValue > 0,
+                      let c = closesArr[i] as? NSNumber, c.doubleValue > 0 else { continue }
+                let v = (volsArr[i] as? NSNumber)?.doubleValue ?? 0
+                klines.append(Kline(
+                    timestamp: ts[i] * 1000,
+                    open: o.doubleValue,
+                    high: h.doubleValue,
+                    low: l.doubleValue,
+                    close: c.doubleValue,
+                    volume: v
+                ))
+            }
+            return klines
         }
+        
+        let klines = buildKlines(ts: timestamps, open: quote["open"], high: quote["high"], low: quote["low"], close: quote["close"], volume: quote["volume"])
+        if klines.isEmpty { throw APIError.noData }
         
         // 按时间正序排列
         klines.sort { $0.timestamp < $1.timestamp }
