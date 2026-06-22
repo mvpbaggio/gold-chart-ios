@@ -1,0 +1,33 @@
+name: GoldChart
+options:
+  bundleIdPrefix: com.goldchart
+  deploymentTarget:
+    iOS: "14.0"
+  xcodeVersion: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.5"
+    TARGETED_DEVICE_FAMILY: "1"
+    INFOPLIST_FILE: GoldChartApp/Info.plist
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    PRODUCT_BUNDLE_IDENTIFIER: com.goldchart.ios
+targets:
+  GoldChart:
+    type: application
+    platform: iOS
+    sources:
+      - path: Sources/GoldChart
+    settings:
+      base:
+        INFOPLIST_FILE: GoldChartApp/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.goldchart.ios
+    dependencies:
+      - package: Charts
+        product: DGCharts
+packages:
+  Charts:
+    url: https://github.com/danielgindi/Charts.git
+    from: 5.1.0
