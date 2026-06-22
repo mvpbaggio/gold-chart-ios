@@ -86,26 +86,6 @@ struct CandleChartContainer: UIViewRepresentable {
         dataSet.neutralColor = UIColor(AppColors.textSecondary)
         dataSet.valueTextColor = UIColor.clear
         dataSet.drawValuesEnabled = false
-        
-        // MA叠加
-        if viewModel.showMA {
-            addLineDataSet(to: dataSet, values: viewModel.computeMA(period: 5), color: AppColors.indicatorMA)
-            addLineDataSet(to: dataSet, values: viewModel.computeMA(period: 10), color: AppColors.indicatorEMA)
-            addLineDataSet(to: dataSet, values: viewModel.computeMA(period: 20), color: AppColors.textSecondary)
-        }
-        
-        if viewModel.showEMA {
-            addLineDataSet(to: dataSet, values: viewModel.computeEMA(period: 12), color: AppColors.indicatorEMA)
-            addLineDataSet(to: dataSet, values: viewModel.computeEMA(period: 26), color: AppColors.indicatorRSI)
-        }
-        
-        if viewModel.showBOLL {
-            let boll = viewModel.computeBOLL()
-            addLineDataSet(to: dataSet, values: boll.upper.map { $0 }, color: AppColors.textTertiary)
-            addLineDataSet(to: dataSet, values: boll.middle.map { $0 }, color: AppColors.gold)
-            addLineDataSet(to: dataSet, values: boll.lower.map { $0 }, color: AppColors.textTertiary)
-        }
-        
         return CandleChartData(dataSets: [dataSet] + extraDataSets)
     }
     
