@@ -133,22 +133,18 @@ struct CandleChartContainer: UIViewRepresentable {
         return sets
     }
     
-    private func createLineDataSet(values: [Double?], color: Color, label: String) -> LineChartDataSet {
+    private func createLineDataSet(values: [Double?], clr: Color, label: String) -> LineChartDataSet {
         let entries: [ChartDataEntry] = values.enumerated().compactMap { (i, v) in
             guard let v = v else { return nil }
             return ChartDataEntry(x: Double(i), y: v)
         }
         let dataSet = LineChartDataSet(entries: entries, label: label)
-        dataSet.color = UIColor(color)
+        dataSet.colors = [UIColor(clr)]
         dataSet.lineWidth = 0.8
         dataSet.drawCirclesEnabled = false
         dataSet.drawValuesEnabled = false
         dataSet.axisDependency = .left
         return dataSet
-    }
-    
-    private func addLineDataSet(to set: CandleChartDataSet, values: [Double?], color: Color) {
-        // 这里简化处理，实际MA线通过extraDataSets添加
     }
 }
 
@@ -202,7 +198,7 @@ struct MACDChartView: UIViewRepresentable {
             return ChartDataEntry(x: Double(i), y: v)
         }
         let difSet = LineChartDataSet(entries: difEntries, label: "DIF")
-        difSet.color = UIColor(AppColors.gold)
+        difSet.colors = [UIColor(AppColors.gold)]
         difSet.lineWidth = 1
         difSet.drawCirclesEnabled = false
         difSet.drawValuesEnabled = false
@@ -213,7 +209,7 @@ struct MACDChartView: UIViewRepresentable {
             return ChartDataEntry(x: Double(i), y: v)
         }
         let deaSet = LineChartDataSet(entries: deaEntries, label: "DEA")
-        deaSet.color = UIColor(AppColors.indicatorRSI)
+        deaSet.colors = [UIColor(AppColors.indicatorRSI)]
         deaSet.lineWidth = 0.8
         deaSet.drawCirclesEnabled = false
         deaSet.drawValuesEnabled = false
@@ -286,13 +282,13 @@ struct KDJChartView: UIViewRepresentable {
             ("J", kj, UIColor(AppColors.green))
         ]
         
-        let dataSets: [LineChartDataSet] = colors.map { (name, values, color) in
-            let entries: [ChartDataEntry] = values.enumerated().compactMap { (i, v) in
+        let dataSets: [LineChartDataSet] = colors.map { (name, vals, clr) in
+            let entries: [ChartDataEntry] = vals.enumerated().compactMap { (i, v) in
                 guard let v = v else { return nil }
                 return ChartDataEntry(x: Double(i), y: v)
             }
             let set = LineChartDataSet(entries: entries, label: name)
-            set.color = color
+            set.colors = [clr]
             set.lineWidth = 0.8
             set.drawCirclesEnabled = false
             set.drawValuesEnabled = false
@@ -363,7 +359,7 @@ struct LineIndicatorChartView: UIViewRepresentable {
         }
         
         let dataSet = LineChartDataSet(entries: entries, label: name)
-        dataSet.color = UIColor(color)
+        dataSet.colors = [UIColor(color)]
         dataSet.lineWidth = 1
         dataSet.drawCirclesEnabled = false
         dataSet.drawValuesEnabled = false

@@ -1,4 +1,5 @@
 import SwiftUI
+import DGCharts
 
 @available(iOS 14.0, *)
 struct StockSearchView: View {

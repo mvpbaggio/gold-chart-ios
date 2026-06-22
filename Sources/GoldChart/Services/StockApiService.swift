@@ -24,8 +24,15 @@ class StockApiService {
         request.setValue("www.baidu.com", forHTTPHeaderField: "Referer")
         
         let (data, _) = try await session.data(for: request)
-        guard let text = String(data: data, encoding: .gbk) ?? String(data: data, encoding: .utf8) else {
-            return []
+        
+        // 新浪返回GBK编码，尝试UTF-8后回退GB18030
+        let text: String
+        if let utf8 = String(data: data, encoding: .utf8), !utf8.isEmpty {
+            text = utf8
+        } else {
+            let cfEnc = CFStringEncodings.GB_18030_2000.rawValue
+            let nsEnc = CFStringConvertEncodingToNSStringEncoding(cfEnc)
+            text = NSString(data: data, encoding: nsEnc) as String? ?? ""
         }
         
         return parseSinaSuggest(text)
@@ -33,7 +40,6 @@ class StockApiService {
     
     /// 获取个股日K线（最近90天）
     func fetchStockKlines(code: String) async throws -> [Kline] {
-        // 新浪个股K线
         let market = getMarket(code)
         let fullCode = "\(market)\(code)"
         let urlStr = "\(API.sinaHistory)_symbol=\(fullCode)"
