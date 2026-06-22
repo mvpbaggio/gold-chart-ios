@@ -30,7 +30,7 @@ class StockApiService {
         if let utf8 = String(data: data, encoding: .utf8), !utf8.isEmpty {
             text = utf8
         } else {
-            let cfEnc = CFStringEncodings.GB_18030_2000.rawValue
+            let cfEnc = CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue)
             let nsEnc = CFStringConvertEncodingToNSStringEncoding(cfEnc)
             text = NSString(data: data, encoding: nsEnc) as String? ?? ""
         }

@@ -113,21 +113,21 @@ struct CandleChartContainer: UIViewRepresentable {
         var sets: [ChartDataSetProtocol] = []
         
         if viewModel.showMA {
-            sets.append(createLineDataSet(values: viewModel.computeMA(period: 5), color: AppColors.indicatorMA, label: "MA5"))
-            sets.append(createLineDataSet(values: viewModel.computeMA(period: 10), color: AppColors.indicatorEMA, label: "MA10"))
-            sets.append(createLineDataSet(values: viewModel.computeMA(period: 20), color: AppColors.textSecondary, label: "MA20"))
+            sets.append(createLineDataSet(values: viewModel.computeMA(period: 5), clr: AppColors.indicatorMA, label: "MA5"))
+            sets.append(createLineDataSet(values: viewModel.computeMA(period: 10), clr: AppColors.indicatorEMA, label: "MA10"))
+            sets.append(createLineDataSet(values: viewModel.computeMA(period: 20), clr: AppColors.textSecondary, label: "MA20"))
         }
         
         if viewModel.showEMA {
-            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 12), color: AppColors.indicatorEMA, label: "EMA12"))
-            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 26), color: AppColors.indicatorRSI, label: "EMA26"))
+            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 12), clr: AppColors.indicatorEMA, label: "EMA12"))
+            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 26), clr: AppColors.indicatorRSI, label: "EMA26"))
         }
         
         if viewModel.showBOLL {
             let boll = viewModel.computeBOLL()
-            sets.append(createLineDataSet(values: boll.upper.map { $0 }, color: AppColors.textTertiary, label: "UP"))
-            sets.append(createLineDataSet(values: boll.middle.map { $0 }, color: AppColors.gold, label: "MID"))
-            sets.append(createLineDataSet(values: boll.lower.map { $0 }, color: AppColors.textTertiary, label: "LOW"))
+            sets.append(createLineDataSet(values: boll.upper.map { $0 }, clr: AppColors.textTertiary, label: "UP"))
+            sets.append(createLineDataSet(values: boll.middle.map { $0 }, clr: AppColors.gold, label: "MID"))
+            sets.append(createLineDataSet(values: boll.lower.map { $0 }, clr: AppColors.textTertiary, label: "LOW"))
         }
         
         return sets
