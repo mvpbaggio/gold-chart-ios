@@ -1,0 +1,188 @@
+name: Build IPA (TrollStore)
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'App version (e.g., 1.0.1)'
+        required: false
+        default: '1.0.0'
+
+jobs:
+  build:
+    runs-on: macos-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer || sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer || true
+      
+      - name: Show Xcode version
+        run: xcodebuild -version
+      
+      - name: Create Xcode Project
+        run: |
+          mkdir -p GoldChartApp
+          # 创建Info.plist
+          cat > GoldChartApp/Info.plist << 'INFOPLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>zh_CN</string>
+    <key>CFBundleDisplayName</key>
+    <string>金银Chart</string>
+    <key>CFBundleExecutable</key>
+    <string>GoldChart</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.goldchart.ios</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>GoldChart</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${{ github.event.inputs.version || '1.0.0' }}</string>
+    <key>CFBundleVersion</key>
+    <string>${{ github.run_number }}</string>
+    <key>LSRequiresIPhoneOS</key>
+    <true/>
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+    <key>UIUserInterfaceStyle</key>
+    <string>Dark</string>
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+</dict>
+</plist>
+INFOPLIST
+
+          # 创建Entitlements (TrollStore兼容)
+          cat > GoldChartApp/Entitlements.plist << 'ENTITLEMENTS'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>get-task-allow</key>
+    <false/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+</dict>
+ENTITLEMENTS
+      
+      - name: Generate Xcode Project with xgen
+        run: |
+          brew install xcodegen 2>/dev/null || true
+          
+          cat > project.yml << 'YAML'
+name: GoldChart
+options:
+  bundleIdPrefix: com.goldchart
+  deploymentTarget:
+    iOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.5"
+    TARGETED_DEVICE_FAMILY: "1"
+    INFOPLIST_FILE: GoldChartApp/Info.plist
+    DEVELOPMENT_TEAM: ""
+    CODE_SIGN_STYLE: Manual
+    CODE_SIGNING_ALLOWED: "NO"
+    CODE_SIGNING_REQUIRED: "NO"
+    PRODUCT_BUNDLE_IDENTIFIER: com.goldchart.ios
+targets:
+  GoldChart:
+    type: application
+    platform: iOS
+    sources:
+      - Sources/GoldChart
+    settings:
+      base:
+        INFOPLIST_FILE: GoldChartApp/Info.plist
+        PRODUCT_BUNDLE_IDENTIFIER: com.goldchart.ios
+    dependencies:
+      - framework: Charts
+YAML
+
+          xcodegen generate --project project.yml 2>/dev/null || echo "xcodegen failed, using manual build"
+      
+      - name: Resolve Swift Package Dependencies
+        run: |
+          xcodebuild -resolvePackageDependencies \
+            -project GoldChart.xcodeproj 2>/dev/null || true
+      
+      - name: Build App
+        run: |
+          # 直接通过xcodebuild构建
+          xcodebuild -project GoldChart.xcodeproj \
+            -scheme GoldChart \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath Build/DD \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_ALLOWED="NO" \
+            CODE_SIGNING_REQUIRED="NO" \
+            build 2>&1 | tee build.log
+      
+      - name: Create IPA
+        run: |
+          APP_PATH="Build/DD/Build/Products/Release-iphoneos/GoldChart.app"
+          
+          if [ ! -d "$APP_PATH" ]; then
+            echo "App not found at expected path, searching..."
+            find Build -name "*.app" -type d
+            APP_PATH=$(find Build -name "*.app" -type d | head -1)
+          fi
+          
+          if [ -z "$APP_PATH" ] || [ ! -d "$APP_PATH" ]; then
+            echo "ERROR: App bundle not found"
+            exit 1
+          fi
+          
+          echo "Found app at: $APP_PATH"
+          
+          mkdir -p Payload
+          cp -R "$APP_PATH" Payload/
+          
+          # 生成IPA
+          IPA_NAME="GoldChart-v${{ github.event.inputs.version || '1.0.0' }}-build${{ github.run_number }}.ipa"
+          zip -r "$IPA_NAME" Payload/
+          
+          echo "IPA created: $IPA_NAME"
+          echo "IPA_PATH=$IPA_NAME" >> $GITHUB_ENV
+      
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoldChart-IPA
+          path: GoldChart*.ipa
+          if-no-files-found: error
+      
+      - name: Create Release
+        if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.event.inputs.version || '1.0.0' }}-${{ github.run_number }}
+          name: GoldChart v${{ github.event.inputs.version || '1.0.0' }}
+          files: GoldChart*.ipa
+          draft: true
+          generate_release_notes: true
