@@ -347,6 +347,11 @@ class ChartViewModel: ObservableObject {
         return levels
     }
     
+    /// CNY显示系数（USD→CNY/克换算倍数）
+    var cnyDisplayFactor: Double {
+        useCNY ? currentRate / ounceToGram : 1.0
+    }
+    
     // MARK: - 指标计算（使用原始K线数据）
     func computeMA(period: Int = 5) -> [Double?] {
         IndicatorEngine.ma(realtimeKlines, period: period)

@@ -18,7 +18,33 @@ struct CandleChartContainer: UIViewRepresentable {
     func updateUIView(_ uiView: CandleStickChartView, context: Context) {
         uiView.data = createChartData()
         uiView.marker = SignalMarkerView(viewModel: viewModel)
+        // 每帧刷新坐标轴（支持动态K线延伸）
+        updateAxes(uiView)
         uiView.notifyDataSetChanged()
+    }
+    
+    private func updateAxes(_ chart: CandleStickChartView) {
+        let xAxis = chart.xAxis
+        xAxis.valueFormatter = IndexAxisValueFormatter(
+            values: klines.enumerated().map { (i, k) in
+                if i % max(1, klines.count / 6) == 0 || i == klines.count - 1 {
+                    return k.date.toKlineTimeString(period: viewModel.selectedPeriod)
+                }
+                return ""
+            }
+        )
+        if viewModel.showStopLoss {
+            let leftAxis = chart.leftAxis
+            leftAxis.removeAllLimitLines()
+            for level in viewModel.stopLossLevels {
+                let ll = ChartLimitLine(limit: level.price, label: level.label)
+                ll.labelPosition = .rightTop
+                ll.lineWidth = 1
+                ll.lineDashLengths = [4, 4]
+                ll.valueTextColor = UIColor(level.color == "#EF4444" ? AppColors.red : AppColors.green)
+                leftAxis.addLimitLine(ll)
+            }
+        }
     }
     
     private func configureChart(_ chart: CandleStickChartView, context: Context) {
@@ -107,16 +133,22 @@ struct CandleChartContainer: UIViewRepresentable {
     }
     
     // MARK: - 信号标记数据集
+    /// 当前显示币种的换算系数（CNY模式: 汇率/31.1035, USD模式: 1）
+    private var displayFactor: Double {
+        viewModel.useCNY ? viewModel.currentRate / ChartViewModel.gramPerOunce : 1.0
+    }
+    
     private var signalDataSets: [ChartDataSetProtocol] {
         guard viewModel.showSignals else { return [] }
         guard !klines.isEmpty else { return [] }
         
+        let factor = displayFactor
         var sets: [ChartDataSetProtocol] = []
         
         // 多头开仓标记（绿色三角向上）
         let longEntries: [ChartDataEntry] = viewModel.signalMarkers
             .filter { $0.type == .longOpen }
-            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price) }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
         
         if !longEntries.isEmpty {
             let longSet = ScatterChartDataSet(entries: longEntries, label: "多")
@@ -134,7 +166,7 @@ struct CandleChartContainer: UIViewRepresentable {
         // 空头开仓标记（绿色三角向下）
         let shortEntries: [ChartDataEntry] = viewModel.signalMarkers
             .filter { $0.type == .shortOpen }
-            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price) }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
         
         if !shortEntries.isEmpty {
             let shortSet = ScatterChartDataSet(entries: shortEntries, label: "空")
@@ -152,7 +184,7 @@ struct CandleChartContainer: UIViewRepresentable {
         // 平仓标记（圆点）
         let closeEntries: [ChartDataEntry] = viewModel.signalMarkers
             .filter { !$0.type.isEntry }
-            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price) }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
         
         if !closeEntries.isEmpty {
             let closeSet = ScatterChartDataSet(entries: closeEntries, label: "平")
@@ -171,24 +203,26 @@ struct CandleChartContainer: UIViewRepresentable {
     }
     
     private var extraDataSets: [ChartDataSetProtocol] {
+        let factor = displayFactor
         var sets: [ChartDataSetProtocol] = []
         
         if viewModel.showMA {
-            sets.append(createLineDataSet(values: viewModel.computeMA(period: 5), clr: AppColors.indicatorMA, label: "MA5"))
-            sets.append(createLineDataSet(values: viewModel.computeMA(period: 10), clr: AppColors.indicatorEMA, label: "MA10"))
-            sets.append(createLineDataSet(values: viewModel.computeMA(period: 20), clr: AppColors.textSecondary, label: "MA20"))
+            sets.append(createLineDataSet(values: viewModel.computeMA(period: 5).map { $0.map { $0 * factor } }, clr: AppColors.indicatorMA, label: "MA5"))
+            sets.append(createLineDataSet(values: viewModel.computeMA(period: 10).map { $0.map { $0 * factor } }, clr: AppColors.indicatorEMA, label: "MA10"))
+            sets.append(createLineDataSet(values: viewModel.computeMA(period: 20).map { $0.map { $0 * factor } }, clr: AppColors.textSecondary, label: "MA20"))
         }
         
         if viewModel.showEMA {
-            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 12), clr: AppColors.indicatorEMA, label: "EMA12"))
-            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 26), clr: AppColors.indicatorRSI, label: "EMA26"))
+            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 12).map { $0.map { $0 * factor } }, clr: AppColors.indicatorEMA, label: "EMA12"))
+            sets.append(createLineDataSet(values: viewModel.computeEMA(period: 26).map { $0.map { $0 * factor } }, clr: AppColors.indicatorRSI, label: "EMA26"))
         }
         
         if viewModel.showBOLL {
             let boll = viewModel.computeBOLL()
-            sets.append(createLineDataSet(values: boll.upper.map { $0 }, clr: AppColors.textTertiary, label: "UP"))
-            sets.append(createLineDataSet(values: boll.middle.map { $0 }, clr: AppColors.gold, label: "MID"))
-            sets.append(createLineDataSet(values: boll.lower.map { $0 }, clr: AppColors.textTertiary, label: "LOW"))
+            let mapOpt: ([Double?]) -> [Double?] = { arr in arr.map { $0.map { v in v * factor } } }
+            sets.append(createLineDataSet(values: mapOpt(boll.upper), clr: AppColors.textTertiary, label: "UP"))
+            sets.append(createLineDataSet(values: mapOpt(boll.middle), clr: AppColors.gold, label: "MID"))
+            sets.append(createLineDataSet(values: mapOpt(boll.lower), clr: AppColors.textTertiary, label: "LOW"))
         }
         
         return sets
