@@ -47,6 +47,11 @@ struct ChartView: View {
                     // 综合评分
                     compositeScoreCard
                     
+                    // 历史信号列表（综合评分 ±75 以上）
+                    if !viewModel.signalMarkers.isEmpty {
+                        signalListView
+                    }
+                    
                     // 指标选择
                     indicatorSelector
                     
@@ -288,6 +293,49 @@ struct ChartView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 4)
         .background(AppColors.cardBackground.opacity(0.3))
+    }
+    
+    // MARK: - 历史信号列表
+    private var signalListView: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(viewModel.signalMarkers.suffix(20)) { signal in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 2) {
+                            Image(systemName: signal.type == .longOpen ? "arrowtriangle.up.fill" : "arrowtriangle.down.fill")
+                                .font(.system(size: 10))
+                                .foregroundColor(signal.type == .longOpen ? AppColors.red : AppColors.green)
+                            Text(priceFormatted(signal.price))
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(AppColors.textPrimary)
+                        }
+                        HStack(spacing: 4) {
+                            Text("止\(signal.type == .longOpen ? "损" : "损")")
+                                .foregroundColor(AppColors.green)
+                            + Text(String(format: "%.1f", signal.stopLoss ?? 0))
+                                .foregroundColor(AppColors.green)
+                            Text("|")
+                                .foregroundColor(AppColors.textTertiary)
+                            Text("盈")
+                                .foregroundColor(AppColors.red)
+                            + Text(String(format: "%.1f", signal.stopTarget ?? 0))
+                                .foregroundColor(AppColors.red)
+                        }
+                        .font(.system(size: 8))
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(AppColors.cardBackground)
+                    .cornerRadius(4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(signal.type == .longOpen ? AppColors.red.opacity(0.3) : AppColors.green.opacity(0.3), lineWidth: 1)
+                    )
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+        }
     }
     
     // MARK: - 综合评分卡

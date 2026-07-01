@@ -428,4 +428,48 @@ class SignalEngine {
         
         return SignalBreakdown(name: "K线形态", score: 0, weight: weight)
     }
+    
+    // MARK: - 逐根K线历史评分信号
+    /// 逐根K线计算综合评分，>=+75产生做多信号，<=-75产生做空信号
+    static func perCandleSignals(_ data: [Kline]) -> [SignalMarker] {
+        guard data.count >= 60 else { return [] }
+        var signals: [SignalMarker] = []
+        
+        for i in 59..<data.count {
+            let prefix = Array(data[0...i])
+            let cs = composite(prefix)
+            let candle = data[i]
+            
+            if cs.score >= 75 {
+                let stopLoss = candle.low       // 该K线最低点
+                let range = candle.close - stopLoss
+                let stopTarget = candle.close + range  // 1:1
+                signals.append(SignalMarker(
+                    candleIndex: i,
+                    type: .longOpen,
+                    price: candle.close,
+                    stopLoss: stopLoss,
+                    stopTarget: stopTarget,
+                    strength: min(cs.score, 100),
+                    source: "综合评分",
+                    timestamp: candle.timestamp
+                ))
+            } else if cs.score <= -75 {
+                let stopLoss = candle.high       // 该K线最高点
+                let range = stopLoss - candle.close
+                let stopTarget = candle.close - range  // 1:1
+                signals.append(SignalMarker(
+                    candleIndex: i,
+                    type: .shortOpen,
+                    price: candle.close,
+                    stopLoss: stopLoss,
+                    stopTarget: stopTarget,
+                    strength: min(abs(cs.score), 100),
+                    source: "综合评分",
+                    timestamp: candle.timestamp
+                ))
+            }
+        }
+        return signals
+    }
 }

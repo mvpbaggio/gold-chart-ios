@@ -49,6 +49,28 @@ struct CandleChartContainer: UIViewRepresentable {
             leftAxis.addLimitLine(liveLl)
         }
         
+        // 近2个信号的止损/止盈线
+        let recentSignals = viewModel.signalMarkers.suffix(2)
+        for signal in recentSignals {
+            guard let sl = signal.stopLoss, let st = signal.stopTarget else { continue }
+            let factor = displayFactor
+            
+            let slLl = ChartLimitLine(limit: sl * factor, label: "止损 \(String(format: "%.1f", sl * factor))")
+            slLl.labelPosition = .rightTop
+            slLl.lineWidth = 1
+            slLl.lineDashLengths = [4, 4]
+            slLl.lineColor = UIColor(AppColors.green)
+            slLl.valueTextColor = UIColor(AppColors.green)
+            leftAxis.addLimitLine(slLl)
+            
+            let stLl = ChartLimitLine(limit: st * factor, label: "止盈 \(String(format: "%.1f", st * factor))")
+            stLl.labelPosition = .rightTop
+            stLl.lineWidth = 1
+            stLl.lineDashLengths = [4, 4]
+            stLl.lineColor = UIColor(AppColors.red)
+            stLl.valueTextColor = UIColor(AppColors.red)
+            leftAxis.addLimitLine(stLl)
+        }
     }
     
     private func configureChart(_ chart: CandleStickChartView, context: Context) {
@@ -119,7 +141,7 @@ struct CandleChartContainer: UIViewRepresentable {
         dataSet.valueTextColor = UIColor.clear
         dataSet.drawValuesEnabled = false
         
-        let data = CandleChartData(dataSets: [dataSet] + extraDataSets)
+        let data = CandleChartData(dataSets: [dataSet] + extraDataSets + signalDataSets)
         return data
     }
     
@@ -127,6 +149,45 @@ struct CandleChartContainer: UIViewRepresentable {
     /// 当前显示币种的换算系数（CNY模式: 汇率/31.1035, USD模式: 1）
     private var displayFactor: Double {
         viewModel.useCNY ? viewModel.currentRate / ChartViewModel.gramPerOunce : 1.0
+    }
+    
+    private var signalDataSets: [ChartDataSetProtocol] {
+        guard !viewModel.signalMarkers.isEmpty else { return [] }
+        let factor = displayFactor
+        
+        // 多头信号（三角向上）
+        let longEntries = viewModel.signalMarkers
+            .filter { $0.type == .longOpen }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
+        
+        // 空头信号（三角向下）
+        let shortEntries = viewModel.signalMarkers
+            .filter { $0.type == .shortOpen }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
+        
+        var sets: [ChartDataSetProtocol] = []
+        
+        if !longEntries.isEmpty {
+            let s = ScatterChartDataSet(entries: longEntries, label: "做多")
+            s.setScatterShape(.triangle)
+            s.setColor(UIColor(AppColors.red))
+            s.scatterShapeSize = 14
+            s.drawValuesEnabled = false
+            s.axisDependency = .left
+            sets.append(s)
+        }
+        
+        if !shortEntries.isEmpty {
+            let s = ScatterChartDataSet(entries: shortEntries, label: "做空")
+            s.setScatterShape(.chevronDown)
+            s.setColor(UIColor(AppColors.green))
+            s.scatterShapeSize = 14
+            s.drawValuesEnabled = false
+            s.axisDependency = .left
+            sets.append(s)
+        }
+        
+        return sets
     }
     
     private var extraDataSets: [ChartDataSetProtocol] {

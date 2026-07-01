@@ -28,6 +28,7 @@ class ChartViewModel: ObservableObject {
     private var historicalCount: Int = 0
     
     // 选中的指标
+    @Published var signalMarkers: [SignalMarker] = []
     @Published var showMA = false
     @Published var showEMA = false
     @Published var showMACD = false
@@ -244,6 +245,7 @@ class ChartViewModel: ObservableObject {
             debugText = "[雅虎] \(fetched.count)根K线 OK"
             if !fetched.isEmpty {
                 compositeSignal = SignalEngine.composite(fetched)
+                signalMarkers = SignalEngine.perCandleSignals(fetched)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -254,6 +256,7 @@ class ChartViewModel: ObservableObject {
             historicalCount = mock.count
             if !mock.isEmpty {
                 compositeSignal = SignalEngine.composite(mock)
+                signalMarkers = SignalEngine.perCandleSignals(mock)
             }
         }
         
