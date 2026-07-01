@@ -109,20 +109,12 @@ class RealTimeService: ObservableObject {
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             guard let data = data, error == nil else { return }
             
-            // Sina 部分中文字段用 GB 编码，导致个别字节不是合法 UTF-8
-            // 先试 UTF-8，不行用 GB 18030（新浪编码）
-            let text: String?
-            if let utf8 = String(data: data, encoding: .utf8) {
-                text = utf8
-            } else {
-                let gbk = CFStringConvertEncodingToNSStringEncoding(
-                    CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
-                text = NSString(data: data, encoding: gbk) as String?
-            }
-            
-            guard let t = text else { return }
+            // Sina 中文字段(最后)是 GBK 编码，用 .utf8 会返回 nil
+            // String(decoding:as:) 不抛异常，非法字节用 � 替换
+            // 反正报价字段0~12全是ASCII，中文字段不用，完全不受影响
+            let text = String(decoding: data, as: UTF8.self)
             DispatchQueue.main.async {
-                self?.parseResponse(t, product: product)
+                self?.parseResponse(text, product: product)
             }
         }.resume()
     }

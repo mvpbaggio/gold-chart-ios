@@ -46,6 +46,9 @@ struct ChartView: View {
                         }
                     }
                     
+                    // 调试状态栏（K线实时更新诊断用）
+                    debugBar
+                    
                     // 信号标记列表
                     if viewModel.showSignals && !viewModel.signalMarkers.isEmpty {
                         signalList
@@ -292,6 +295,25 @@ struct ChartView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
+    }
+    
+    // MARK: - 调试状态栏
+    private var debugBar: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(viewModel.isRealTimeConnected ? Color.green : Color.red)
+                .frame(width: 6, height: 6)
+            
+            Text(viewModel.debugText)
+                .font(.system(size: 8))
+                .foregroundColor(AppColors.textTertiary)
+                .lineLimit(1)
+            
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 4)
+        .background(AppColors.cardBackground.opacity(0.3))
     }
     
     // MARK: - 信号列表

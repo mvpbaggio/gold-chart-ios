@@ -18,6 +18,7 @@ class ChartViewModel: ObservableObject {
     // 实时行情
     @Published var realTimeQuote: RealTimeQuote?
     @Published var isRealTimeConnected = false
+    @Published var debugText: String = "初始..."
     
     // 人民币计价
     @Published var useCNY = false
@@ -65,14 +66,25 @@ class ChartViewModel: ObservableObject {
                 guard let self = self, let quote = quote else { return }
                 self.realTimeQuote = quote
                 self.updateRealtimeCandle(quote: quote)
+                self.debugText = "[OK] $\(String(format: "%.2f", quote.price)) @\(quote.time) | K线\(self.realtimeKlines.count)根 | \(self.historicalCount)历史"
             }
             .store(in: &cancellables)
         
         RealTimeService.shared.$isConnected
             .receive(on: DispatchQueue.main)
-            .assign(to: &$isRealTimeConnected)
+            .sink { [weak self] connected in
+                self?.isRealTimeConnected = connected
+                if !connected {
+                    self?.debugText = "[等待] Sina连接中..."
+                }
+            }
+            .store(in: &cancellables)
         
-        Task { await refresh() }
+        Task {
+            debugText = "[加载] 下载K线数据..."
+            await refresh()
+            debugText = "[就绪] K线\(realtimeKlines.count)根 | 实时连接\(isRealTimeConnected ? "" : "未")"
+        }
     }
     
     // MARK: - 人民币计价（元/克）
@@ -225,6 +237,7 @@ class ChartViewModel: ObservableObject {
             klines = fetched
             realtimeKlines = fetched
             historicalCount = fetched.count
+            debugText = "[雅虎] \(fetched.count)根K线 OK"
             if !fetched.isEmpty {
                 assessment = SignalEngine.evaluateSignals(klines: fetched)
                 signalMarkers = SignalEngine.detectPerCandleSignals(fetched)
@@ -232,6 +245,7 @@ class ChartViewModel: ObservableObject {
             }
         } catch {
             errorMessage = error.localizedDescription
+            debugText = "[降级] 雅虎不通! 用模拟数据. \(error.localizedDescription)"
             let mock = MockData.generateKlines(count: 200)
             klines = mock
             realtimeKlines = mock
