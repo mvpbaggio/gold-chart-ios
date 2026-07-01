@@ -29,14 +29,14 @@ struct ChartView: View {
                                 klines: viewModel.displayKlines,
                                 viewModel: viewModel
                             )
-                            .frame(height: 320)
+                            .frame(height: 420)
                             .padding(.horizontal, 4)
                         }
                         
                         // 副图指标
                         if let indicator = viewModel.selectedIndicator {
                             indicatorSubChart(indicator)
-                                .frame(height: 120)
+                                .frame(height: 100)
                                 .padding(.horizontal, 4)
                         }
                     }
