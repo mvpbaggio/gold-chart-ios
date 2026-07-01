@@ -277,3 +277,48 @@ struct OverallAssessment {
         return OverallAssessment(score: score, signals: signals, level: level)
     }
 }
+
+// MARK: - 多指标综合评分
+struct CompositeSignal {
+    /// 最终评分 -100~+100（正=多，负=空）
+    let score: Int
+    /// 各指标明细
+    let breakdown: [SignalBreakdown]
+    /// 多空评级
+    var level: SignalLevel {
+        switch score {
+        case 70...: return .fierceLong
+        case 35...69: return .long
+        case -34...34: return .neutral
+        case -69...-35: return .short
+        default: return .fierceShort
+        }
+    }
+    
+    enum SignalLevel: String {
+        case fierceLong = "强势做多"
+        case long = "偏多"
+        case neutral = "观望"
+        case short = "偏空"
+        case fierceShort = "强势做空"
+        
+        var color: String {
+            switch self {
+            case .fierceLong: return "#EF4444"
+            case .long: return "#F97316"
+            case .neutral: return "#9CA3AF"
+            case .short: return "#22C55E"
+            case .fierceShort: return "#059669"
+            }
+        }
+    }
+}
+
+struct SignalBreakdown: Identifiable {
+    let id = UUID()
+    let name: String
+    /// -100~+100（正=多，负=空）
+    let score: Int
+    let weight: Double
+    var weightedScore: Int { Int(Double(score) * weight) }
+}

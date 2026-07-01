@@ -4,8 +4,6 @@ import SwiftUI
 struct ChartView: View {
     @ObservedObject var viewModel: ChartViewModel
     
-    @State private var showSignalDetail = false
-    
     var body: some View {
         VStack(spacing: 0) {
             // 实时行情栏 + 币种切换
@@ -33,9 +31,6 @@ struct ChartView: View {
                             )
                             .frame(height: 320)
                             .padding(.horizontal, 4)
-                            .onTapGesture {
-                                showSignalDetail = true
-                            }
                         }
                         
                         // 副图指标
@@ -49,10 +44,8 @@ struct ChartView: View {
                     // 调试状态栏（K线实时更新诊断用）
                     debugBar
                     
-                    // 信号标记列表
-                    if viewModel.showSignals && !viewModel.signalMarkers.isEmpty {
-                        signalList
-                    }
+                    // 综合评分
+                    compositeScoreCard
                     
                     // 指标选择
                     indicatorSelector
@@ -65,9 +58,6 @@ struct ChartView: View {
                     Spacer()
                 }
             }
-        }
-        .sheet(isPresented: $showSignalDetail) {
-            SignalDetailSheet(viewModel: viewModel)
         }
     }
     
@@ -135,16 +125,6 @@ struct ChartView: View {
                     .stroke(AppColors.cardBorder, lineWidth: 1)
             )
             
-            // 信号开关
-            Button(action: { viewModel.showSignals.toggle() }) {
-                Text("信号")
-                    .font(.system(size: 11))
-                    .foregroundColor(viewModel.showSignals ? AppColors.gold : AppColors.textTertiary)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(viewModel.showSignals ? AppColors.gold.opacity(0.15) : Color.clear)
-            .cornerRadius(4)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
@@ -228,12 +208,6 @@ struct ChartView: View {
             
             Spacer()
             
-            if let assessment = viewModel.assessment {
-                Text("信号: \(assessment.score)")
-                    .font(.system(size: 11))
-                    .foregroundColor(AppColors.textTertiary)
-            }
-            
             // 汇率显示
             Text("\(String(format: "%.4f", viewModel.currentRate))  ¥\(String(format: "%.2f", viewModel.currentPrice * viewModel.currentRate / ChartViewModel.gramPerOunce))/g")
                 .font(.system(size: 10))
@@ -316,40 +290,116 @@ struct ChartView: View {
         .background(AppColors.cardBackground.opacity(0.3))
     }
     
-    // MARK: - 信号列表
-    private var signalList: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                ForEach(viewModel.signalMarkers.suffix(10)) { signal in
-                    HStack(spacing: 2) {
-                        Text(signal.type.marker)
-                            .font(.system(size: 10, weight: .bold))
-                            .foregroundColor(signalColor(signal.type))
-                        Text(priceFormatted(signal.price))
-                            .font(.system(size: 9))
-                            .foregroundColor(AppColors.textSecondary)
-                    }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .background(AppColors.cardBackground)
-                    .cornerRadius(4)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 4)
-                            .stroke(signalColor(signal.type).opacity(0.3), lineWidth: 1)
-                    )
+    // MARK: - 综合评分卡
+    private var compositeScoreCard: some View {
+        VStack(spacing: 6) {
+            if let cs = viewModel.compositeSignal {
+                HStack(spacing: 16) {
+                    // 评级标签
+                    Label(cs.level.rawValue, systemImage: levelIcon(cs.level))
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(Color(hex: cs.level.color))
+                    
+                    // 评分数字
+                    Text("\(cs.score)")
+                        .font(.system(size: 32, weight: .heavy))
+                        .foregroundColor(Color(hex: cs.level.color))
+                    
+                    Spacer()
+                    
+                    // 指标个数
+                    Text("\(cs.breakdown.count)项")
+                        .font(.system(size: 10))
+                        .foregroundColor(AppColors.textTertiary)
                 }
+                .padding(.horizontal, 12)
+                
+                // 评分进度条
+                scoreBar(value: Double(cs.score))
+                    .padding(.horizontal, 12)
+                
+                // 11项明细
+                VStack(spacing: 0) {
+                    ForEach(cs.breakdown) { item in
+                        HStack(spacing: 8) {
+                            Text(item.name)
+                                .font(.system(size: 10))
+                                .foregroundColor(AppColors.textSecondary)
+                                .frame(width: 80, alignment: .leading)
+                            
+                            // 单项进度条
+                            GeometryReader { geo in
+                                ZStack(alignment: .leading) {
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(AppColors.cardBorder)
+                                        .frame(height: 6)
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .fill(item.score >= 0 ? AppColors.red : AppColors.green)
+                                        .frame(width: max(2, min(geo.size.width, geo.size.width * CGFloat(abs(item.score)) / 200)),
+                                               height: 6)
+                                }
+                            }
+                            .frame(height: 6)
+                            
+                            Text("\(item.score)")
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundColor(item.score >= 0 ? AppColors.red : AppColors.green)
+                                .frame(width: 28, alignment: .trailing)
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 2)
+                    }
+                }
+            } else {
+                Text("正在计算综合评分...")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppColors.textTertiary)
+                    .padding()
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 4)
         }
+        .padding(.vertical, 8)
+        .background(AppColors.cardBackground.opacity(0.5))
+        .cornerRadius(8)
+        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppColors.cardBorder, lineWidth: 1))
+        .padding(.horizontal, 12)
     }
     
-    private func signalColor(_ type: SignalMarker.SignalType) -> Color {
-        switch type {
-        case .longOpen: return AppColors.red
-        case .shortOpen: return AppColors.green
-        case .longClose: return AppColors.gold
-        case .shortClose: return AppColors.gold
+    private func scoreBar(value: Double) -> some View {
+        GeometryReader { geo in
+            ZStack(alignment: .leading) {
+                // 背景（左绿右红渐变色）
+                LinearGradient(gradient: Gradient(colors: [
+                    Color.green.opacity(0.3),
+                    Color.gray.opacity(0.15),
+                    Color.red.opacity(0.3)
+                ]), startPoint: .leading, endPoint: .trailing)
+                .frame(height: 12)
+                .cornerRadius(6)
+                
+                // 中间0点
+                Circle()
+                    .fill(AppColors.textTertiary)
+                    .frame(width: 4, height: 4)
+                    .offset(x: geo.size.width / 2, y: 0)
+                
+                // 评分指针
+                let pct = (value + 100) / 200
+                Circle()
+                    .fill(value >= 0 ? AppColors.red : AppColors.green)
+                    .frame(width: 10, height: 10)
+                    .offset(x: max(5, min(geo.size.width - 5, geo.size.width * CGFloat(pct))), y: 0)
+            }
+        }
+        .frame(height: 12)
+    }
+    
+    private func levelIcon(_ level: CompositeSignal.SignalLevel) -> String {
+        switch level {
+        case .fierceLong: return "arrow.up.circle.fill"
+        case .long: return "arrow.up"
+        case .neutral: return "circle"
+        case .short: return "arrow.down"
+        case .fierceShort: return "arrow.down.circle.fill"
         }
     }
     
@@ -469,58 +519,6 @@ struct ChartView: View {
     }
 }
 
-// MARK: - 信号详情页
-@available(iOS 14.0, *)
-struct SignalDetailSheet: View {
-    @ObservedObject var viewModel: ChartViewModel
-    @Environment(\.presentationMode) var presentationMode
-    
-    var body: some View {
-        NavigationView {
-            List {
-                ForEach(viewModel.signalMarkers.reversed()) { signal in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(signal.type.rawValue)
-                                .font(.headline)
-                                .foregroundColor(signalColor(signal.type))
-                            Spacer()
-                            Text(signal.source)
-                                .font(.caption)
-                                .foregroundColor(AppColors.textTertiary)
-                        }
-                        HStack {
-                            Text("价格: \(signal.price.formattedPrice(viewModel.selectedProduct))")
-                            if let sl = signal.stopLoss {
-                                Text("止损: \(sl.formattedPrice(viewModel.selectedProduct))")
-                            }
-                            if let st = signal.stopTarget {
-                                Text("止盈: \(st.formattedPrice(viewModel.selectedProduct))")
-                            }
-                        }
-                        .font(.caption)
-                        .foregroundColor(AppColors.textSecondary)
-                    }
-                    .padding(.vertical, 4)
-                }
-            }
-            .navigationTitle("信号明细")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") { presentationMode.wrappedValue.dismiss() }
-                }
-            }
-        }
-    }
-    
-    private func signalColor(_ type: SignalMarker.SignalType) -> Color {
-        switch type {
-        case .longOpen: return AppColors.red
-        case .shortOpen: return AppColors.green
-        case .longClose, .shortClose: return AppColors.gold
-        }
-    }
-}
+
 
 

@@ -8,8 +8,7 @@ class ChartViewModel: ObservableObject {
     @Published var selectedPeriod: KlinePeriod = .h1
     @Published var isLoading = false
     @Published var errorMessage: String?
-    @Published var assessment: OverallAssessment?
-    @Published var signalMarkers: [SignalMarker] = []
+    @Published var compositeSignal: CompositeSignal?
     @Published var position: PositionDirection = .none
     @Published var entryPrice: Double = 0
     @Published var pnl: Double = 0
@@ -36,8 +35,7 @@ class ChartViewModel: ObservableObject {
     @Published var showKDJ = false
     @Published var showBOLL = false
     @Published var showVolume = true
-    @Published var showSignals = true
-    @Published var showStopLoss = true
+    @Published var showOldMarkers = false  // 旧版信号三角/止损（默认关闭，看综合评分就够了）
     
     @Published var selectedIndicator: IndicatorType? = nil
     
@@ -67,6 +65,7 @@ class ChartViewModel: ObservableObject {
                 self.realTimeQuote = quote
                 self.updateRealtimeCandle(quote: quote)
                 self.debugText = "[OK] $\(String(format: "%.2f", quote.price)) @\(quote.time) | K线\(self.realtimeKlines.count)根 | \(self.historicalCount)历史"
+                self.recalcComposite()
             }
             .store(in: &cancellables)
         
@@ -169,6 +168,11 @@ class ChartViewModel: ObservableObject {
         return realtimeKlines
     }
     
+    /// 实时更新复合评分（每次即时报价变化时重算）
+    private func recalcComposite() {
+        compositeSignal = SignalEngine.composite(realtimeKlines)
+    }
+    
     // MARK: - 实时K线延伸
     
     private func updateRealtimeCandle(quote: RealTimeQuote) {
@@ -239,9 +243,7 @@ class ChartViewModel: ObservableObject {
             historicalCount = fetched.count
             debugText = "[雅虎] \(fetched.count)根K线 OK"
             if !fetched.isEmpty {
-                assessment = SignalEngine.evaluateSignals(klines: fetched)
-                signalMarkers = SignalEngine.detectPerCandleSignals(fetched)
-                updatePosition()
+                compositeSignal = SignalEngine.composite(fetched)
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -251,8 +253,7 @@ class ChartViewModel: ObservableObject {
             realtimeKlines = mock
             historicalCount = mock.count
             if !mock.isEmpty {
-                assessment = SignalEngine.evaluateSignals(klines: mock)
-                signalMarkers = SignalEngine.detectPerCandleSignals(mock)
+                compositeSignal = SignalEngine.composite(mock)
             }
         }
         
@@ -281,85 +282,6 @@ class ChartViewModel: ObservableObject {
     
     deinit {
         RealTimeService.shared.stopPolling()
-    }
-    
-    // MARK: - 持仓追踪
-    private func updatePosition() {
-        let entries = signalMarkers.filter { $0.type.isEntry }.suffix(5)
-        guard let last = entries.last else {
-            position = .none
-            return
-        }
-        
-        if last.type == .longOpen {
-            position = .long
-            entryPrice = last.price
-        } else if last.type == .shortOpen {
-            position = .short
-            entryPrice = last.price
-        }
-        
-        let closes = signalMarkers.filter { !$0.type.isEntry }.suffix(2)
-        if let lastClose = closes.last {
-            if lastClose.candleIndex >= last.candleIndex {
-                position = .none
-                entryPrice = 0
-            }
-        }
-        
-        updatePnL()
-    }
-    
-    private func updatePnL() {
-        let currentPrice = realTimeQuote?.price ?? realtimeKlines.last?.close ?? 0
-        guard entryPrice > 0 else {
-            pnl = 0
-            pnlPercent = 0
-            return
-        }
-        
-        switch position {
-        case .long:
-            pnl = currentPrice - entryPrice
-            pnlPercent = (pnl / entryPrice) * 100
-        case .short:
-            pnl = entryPrice - currentPrice
-            pnlPercent = (pnl / entryPrice) * 100
-        case .none:
-            pnl = 0
-            pnlPercent = 0
-        }
-    }
-    
-    var activeSignals: [SignalMarker] {
-        guard !signalMarkers.isEmpty else { return [] }
-        let entries = signalMarkers.filter { $0.type.isEntry }
-        let lastEntry = entries.last
-        return entries.filter { $0.candleIndex >= (lastEntry?.candleIndex ?? 0) - 5 }
-    }
-    
-    var stopLossLevels: [(price: Double, label: String, color: String)] {
-        var levels: [(Double, String, String)] = []
-        let rate = useCNY ? (currentRate / ounceToGram) : 1
-        for signal in activeSignals {
-            guard let sl = signal.stopLoss else { continue }
-            let slPrice = sl * rate
-            if signal.type == .longOpen {
-                // 止损=绿色，止盈=红色
-                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#22C55E"))
-                if let st = signal.stopTarget {
-                    let stPrice = st * rate
-                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#EF4444"))
-                }
-            } else if signal.type == .shortOpen {
-                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#22C55E"))
-                if let st = signal.stopTarget {
-                    let stPrice = st * rate
-                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#EF4444"))
-                }
-            }
-        }
-        return levels
     }
     
     /// CNY显示系数（USD→CNY/克换算倍数）

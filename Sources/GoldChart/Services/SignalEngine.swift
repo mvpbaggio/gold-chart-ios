@@ -1,548 +1,431 @@
 import Foundation
 
+// MARK: - 11指标综合评分引擎
 class SignalEngine {
     
-    // MARK: - 综合信号评分
-    static func evaluateSignals(klines: [Kline]) -> OverallAssessment {
-        var signals: [TradeSignal] = []
+    /// 11个指标加权合成评分
+    static func composite(_ data: [Kline]) -> CompositeSignal {
+        guard data.count >= 60 else {
+            return CompositeSignal(score: 0, breakdown: [
+                SignalBreakdown(name: "数据不足", score: 0, weight: 1.0)
+            ])
+        }
         
-        // 1. MACD背离
-        signals.append(macdDivergence(klines))
+        var breakdowns: [SignalBreakdown] = []
         
-        // 2. RSI超买超卖
-        signals.append(rsiOversoldOverbought(klines))
+        // 1. MACD金叉死叉 (12%)
+        breakdowns.append(scoreMacdCross(data, weight: 0.12))
         
-        // 3. KDJ金叉死叉
-        signals.append(kdjCross(klines))
+        // 2. MACD背离 (10%)
+        breakdowns.append(scoreMacdDivergence(data, weight: 0.10))
         
-        // 4. BOLL位置
-        signals.append(bollingerPosition(klines))
+        // 3. RSI超买超卖 (10%)
+        breakdowns.append(scoreRSI(data, weight: 0.10))
         
-        // 5. MA金叉死叉
-        signals.append(maCross(klines))
+        // 4. KDJ金叉死叉 (8%)
+        breakdowns.append(scoreKDJ(data, weight: 0.08))
         
-        // 6. 多周期共振
-        signals.append(multiPeriodResonance(klines))
+        // 5. 布林带位置 (10%)
+        breakdowns.append(scoreBollinger(data, weight: 0.10))
         
-        // 7. 成交量异常
-        signals.append(volumeAnomaly(klines))
+        // 6. 均线排列 (10%)
+        breakdowns.append(scoreMA(data, weight: 0.10))
         
-        // 8. 威廉指标
-        signals.append(williamsSignal(klines))
+        // 7. CCI (10%)
+        breakdowns.append(scoreCCI(data, weight: 0.10))
         
-        return OverallAssessment.evaluate(signals: signals)
+        // 8. MFI资金流向 (8%)
+        breakdowns.append(scoreMFI(data, weight: 0.08))
+        
+        // 9. ADX趋势强度 (7%)
+        breakdowns.append(scoreADX(data, weight: 0.07))
+        
+        // 10. 威廉%R (7%)
+        breakdowns.append(scoreWilliams(data, weight: 0.07))
+        
+        // 11. K线形态 (8%)
+        breakdowns.append(scoreCandlestick(data, weight: 0.08))
+        
+        // 计算加权总分
+        var totalScore: Double = 0
+        for b in breakdowns {
+            totalScore += Double(b.score) * b.weight
+        }
+        
+        return CompositeSignal(score: Int(totalScore.rounded()), breakdown: breakdowns)
     }
     
-    // MARK: - MACD背离
-    static func macdDivergence(_ data: [Kline]) -> TradeSignal {
+    // MARK: - 1. MACD金叉死叉
+    private static func scoreMacdCross(_ data: [Kline], weight: Double) -> SignalBreakdown {
+        let macd = IndicatorEngine.macd(data)
+        let dif = macd.dif.compactMap { $0 }
+        let dea = macd.dea.compactMap { $0 }
+        let hist = macd.histogram.compactMap { $0 }
+        
+        guard dif.count >= 3, dea.count >= 3, hist.count >= 3,
+              let lastDIF = dif.last, let lastDEA = dea.last,
+              let prevDIF = dif[safe: dif.count - 2],
+              let prevDEA = dea[safe: dea.count - 2] else {
+            return SignalBreakdown(name: "MACD", score: 0, weight: weight)
+        }
+        
+        // 金叉
+        if prevDIF <= prevDEA && lastDIF > lastDEA {
+            return SignalBreakdown(name: "MACD金叉", score: 60, weight: weight)
+        }
+        // 死叉
+        if prevDIF >= prevDEA && lastDIF < lastDEA {
+            return SignalBreakdown(name: "MACD死叉", score: -60, weight: weight)
+        }
+        
+        // 无交叉：看柱体趋势
+        let histTrend = hist.suffix(5)
+        let up = histTrend.filter { $0 > 0 }.count
+        let dn = histTrend.filter { $0 < 0 }.count
+        
+        if lastDIF > lastDEA {
+            let score = min(up * 12, 40)
+            return SignalBreakdown(name: "MACD", score: score, weight: weight)
+        }
+        let score = min(dn * 12, 40)
+        return SignalBreakdown(name: "MACD", score: -score, weight: weight)
+    }
+    
+    // MARK: - 2. MACD背离
+    private static func scoreMacdDivergence(_ data: [Kline], weight: Double) -> SignalBreakdown {
         guard data.count >= 50 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "MACD", detail: "数据不足")
+            return SignalBreakdown(name: "MACD背离", score: 0, weight: weight)
         }
         
-        let macdResult = IndicatorEngine.macd(data)
-        let histogram = macdResult.histogram.compactMap { $0 }
-        guard histogram.count >= 10 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "MACD", detail: "等待更多数据")
+        let macd = IndicatorEngine.macd(data)
+        let hist = macd.histogram.compactMap { $0 }
+        guard hist.count >= 10 else {
+            return SignalBreakdown(name: "MACD背离", score: 0, weight: weight)
         }
         
-        // 底背离检测：价格新低但MACD没新低
-        let recent8 = Array(histogram.suffix(8))
-        let priceRecent8 = Array(data.suffix(8))
-        
-        var buySignal = false
-        var sellSignal = false
-        
-        // 简化的背离检测
-        if let histLow = recent8.min(),
-           let priceLow = priceRecent8.min(by: { $0.low < $1.low }),
-           histLow > -100 && priceLow.low == data.last?.low {
-            // 价格新低但MACD柱没创新低 → 底背离
-            let histIndex = histogram.suffix(15).firstIndex(of: histLow) ?? histogram.count - 1
-            let lastHist = histogram.last ?? 0
-            if lastHist > histLow && data.last?.close ?? 0 > (data[safe: histIndex]?.close ?? 0) {
-                buySignal = true
-            }
+        let recentHist = Array(hist.suffix(10))
+        let recentPrices = Array(data.suffix(10))
+        guard let close = data.last?.close else {
+            return SignalBreakdown(name: "MACD背离", score: 0, weight: weight)
         }
         
-        // 顶背离
-        if let histHigh = recent8.max(),
-           let priceHigh = priceRecent8.max(by: { $0.high < $1.high }),
-           histHigh < 100 && priceHigh.high == data.last?.high {
-            let histIndex = histogram.suffix(15).firstIndex(of: histHigh) ?? histogram.count - 1
-            let lastHist = histogram.last ?? 0
-            if lastHist < histHigh && data.last?.close ?? 0 < (data[safe: histIndex]?.close ?? 0) {
-                sellSignal = true
-            }
+        // 底背离：价格更低但MACD柱更高
+        let priceLow = recentPrices.min(by: { $0.low < $1.low })?.low ?? close
+        let histNow = recentHist.last ?? 0
+        let histLow = recentHist.min() ?? 0
+        
+        if close <= priceLow * 1.001 && histNow > histLow + 5 {
+            return SignalBreakdown(name: "MACD底背离", score: 70, weight: weight)
         }
         
-        if buySignal {
-            return TradeSignal(type: .buy, strength: 75, description: "MACD底背离", detail: "价格新低但MACD未创新低，反弹信号")
-        }
-        if sellSignal {
-            return TradeSignal(type: .sell, strength: 75, description: "MACD顶背离", detail: "价格新高但MACD未创新高，回调信号")
+        // 顶背离：价格更高但MACD柱更低
+        let priceHigh = recentPrices.max(by: { $0.high < $1.high })?.high ?? close
+        let histHigh = recentHist.max() ?? 0
+        
+        if close >= priceHigh * 0.999 && histNow < histHigh - 5 {
+            return SignalBreakdown(name: "MACD顶背离", score: -70, weight: weight)
         }
         
-        return TradeSignal(type: .neutral, strength: 50, description: "MACD", detail: "无明显背离")
+        return SignalBreakdown(name: "MACD背离", score: 0, weight: weight)
     }
     
-    // MARK: - RSI超买超卖
-    static func rsiOversoldOverbought(_ data: [Kline]) -> TradeSignal {
+    // MARK: - 3. RSI
+    private static func scoreRSI(_ data: [Kline], weight: Double) -> SignalBreakdown {
         guard data.count >= 20 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "RSI", detail: "数据不足")
+            return SignalBreakdown(name: "RSI", score: 0, weight: weight)
         }
         
         let rsiValues = IndicatorEngine.rsi(data)
-        guard let lastRSI = rsiValues.last ?? nil else {
-            return TradeSignal(type: .neutral, strength: 50, description: "RSI", detail: "计算中")
+        guard let lastRSI = rsiValues.compactMap({ $0 }).last else {
+            return SignalBreakdown(name: "RSI", score: 0, weight: weight)
         }
         
+        // RSI < 30 = 超卖 → 偏多
+        if lastRSI <= 30 {
+            let score = min(Int((30 - lastRSI) * 3), 80)
+            return SignalBreakdown(name: "RSI超卖", score: score, weight: weight)
+        }
+        // RSI > 70 = 超买 → 偏空
         if lastRSI >= 70 {
-            let strength = min(Int((lastRSI - 70) * 3), 95)
-            return TradeSignal(type: .sell, strength: strength, description: "RSI超买",
-                              detail: String(format: "RSI(14)=%.1f ≥ 70", lastRSI))
-        } else if lastRSI <= 30 {
-            let strength = min(Int((30 - lastRSI) * 3), 95)
-            return TradeSignal(type: .buy, strength: strength, description: "RSI超卖",
-                              detail: String(format: "RSI(14)=%.1f ≤ 30", lastRSI))
-        } else {
-            return TradeSignal(type: .neutral, strength: 50, description: "RSI正常",
-                              detail: String(format: "RSI(14)=%.1f", lastRSI))
+            let score = min(Int((lastRSI - 70) * 3), 80)
+            return SignalBreakdown(name: "RSI超买", score: -score, weight: weight)
         }
+        // 正常范围：线性映射
+        let score = Int((lastRSI - 50) * 1.5)
+        return SignalBreakdown(name: "RSI", score: score, weight: weight)
     }
     
-    // MARK: - KDJ金叉死叉
-    static func kdjCross(_ data: [Kline]) -> TradeSignal {
+    // MARK: - 4. KDJ
+    private static func scoreKDJ(_ data: [Kline], weight: Double) -> SignalBreakdown {
         guard data.count >= 20 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "KDJ", detail: "数据不足")
+            return SignalBreakdown(name: "KDJ", score: 0, weight: weight)
         }
         
-        let kdjResult = IndicatorEngine.kdj(data)
-        let kValues = kdjResult.k.compactMap { $0 }
-        let dValues = kdjResult.d.compactMap { $0 }
-        
-        guard kValues.count >= 3, dValues.count >= 3 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "KDJ", detail: "计算中")
+        let kdj = IndicatorEngine.kdj(data)
+        guard let k = kdj.k.compactMap({ $0 }).last,
+              let d = kdj.d.compactMap({ $0 }).last,
+              let prevK = kdj.k.compactMap({ $0 })[safe: max(kdj.k.compactMap({ $0 }).count - 2, 0)],
+              let prevD = kdj.d.compactMap({ $0 })[safe: max(kdj.d.compactMap({ $0 }).count - 2, 0)] else {
+            return SignalBreakdown(name: "KDJ", score: 0, weight: weight)
         }
         
-        let prevK = kValues[safe: kValues.count - 2] ?? 50
-        let prevD = dValues[safe: dValues.count - 2] ?? 50
-        let currK = kValues.last ?? 50
-        let currD = dValues.last ?? 50
-        
-        // 金叉：K上穿D
-        if prevK <= prevD && currK > currD && currK < 40 {
-            return TradeSignal(type: .buy, strength: 70, description: "KDJ金叉",
-                              detail: String(format: "K=%.1f 上穿 D=%.1f", currK, currD))
+        // 金叉（K上穿D + 低位）
+        if prevK <= prevD && k > d && k < 40 {
+            let strength = min(Int((40 - k) * 2), 60)
+            return SignalBreakdown(name: "KDJ金叉", score: strength, weight: weight)
         }
-        // 死叉：K下穿D
-        if prevK >= prevD && currK < currD && currK > 60 {
-            return TradeSignal(type: .sell, strength: 70, description: "KDJ死叉",
-                              detail: String(format: "K=%.1f 下穿 D=%.1f", currK, currD))
+        // 死叉（K下穿D + 高位）
+        if prevK >= prevD && k < d && k > 60 {
+            let strength = min(Int((k - 60) * 2), 60)
+            return SignalBreakdown(name: "KDJ死叉", score: -strength, weight: weight)
         }
         
-        return TradeSignal(type: .neutral, strength: 50, description: "KDJ", detail: "无明显信号")
+        // 无交叉：看K值位置
+        let score = Int((k - 50) * 1.2)
+        return SignalBreakdown(name: "KDJ", score: score, weight: weight)
     }
     
-    // MARK: - BOLL位置
-    static func bollingerPosition(_ data: [Kline]) -> TradeSignal {
+    // MARK: - 5. 布林带
+    private static func scoreBollinger(_ data: [Kline], weight: Double) -> SignalBreakdown {
         guard data.count >= 26 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "布林带", detail: "数据不足")
+            return SignalBreakdown(name: "布林带", score: 0, weight: weight)
         }
         
         let boll = IndicatorEngine.bollinger(data)
         guard let close = data.last?.close,
-              let lower = boll.lower.last ?? nil,
-              let upper = boll.upper.last ?? nil,
-              let middle = boll.middle.last ?? nil else {
-            return TradeSignal(type: .neutral, strength: 50, description: "布林带", detail: "计算中")
+              let upper = boll.upper.compactMap({ $0 }).last,
+              let lower = boll.lower.compactMap({ $0 }).last,
+              let middle = boll.middle.compactMap({ $0 }).last,
+              upper > lower else {
+            return SignalBreakdown(name: "布林带", score: 0, weight: weight)
         }
+        
+        // 价格在通道中的位置，-100~+100
+        let range = upper - lower
+        let pos = range == 0 ? 0 : ((close - middle) / (range / 2)) * 100
         
         if close <= lower {
-            return TradeSignal(type: .buy, strength: 80, description: "触及下轨",
-                              detail: "价格触及布林下轨，超卖反弹")
-        } else if close >= upper {
-            return TradeSignal(type: .sell, strength: 80, description: "触及上轨",
-                              detail: "价格触及布林上轨，超买回调")
-        } else if close < middle {
-            let pct = (middle - close) / (middle - lower)
-            if pct > 0.7 {
-                return TradeSignal(type: .buy, strength: 60, description: "偏向下轨",
-                                  detail: "价格偏向下轨，偏多")
-            }
-        } else if close > middle {
-            let pct = (close - middle) / (upper - middle)
-            if pct > 0.7 {
-                return TradeSignal(type: .sell, strength: 60, description: "偏向上轨",
-                                  detail: "价格偏向上轨，偏空")
-            }
+            return SignalBreakdown(name: "布林触下轨", score: 60, weight: weight)
+        }
+        if close >= upper {
+            return SignalBreakdown(name: "布林触上轨", score: -60, weight: weight)
         }
         
-        return TradeSignal(type: .neutral, strength: 50, description: "布林带中轨附近", detail: nil)
+        return SignalBreakdown(name: "布林", score: Int(pos.rounded()), weight: weight)
     }
     
-    // MARK: - MA金叉死叉
-    static func maCross(_ data: [Kline]) -> TradeSignal {
+    // MARK: - 6. 均线排列
+    private static func scoreMA(_ data: [Kline], weight: Double) -> SignalBreakdown {
         guard data.count >= 30 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "均线系统", detail: "数据不足")
+            return SignalBreakdown(name: "均线", score: 0, weight: weight)
         }
         
         let ma5 = IndicatorEngine.ma(data, period: 5).compactMap { $0 }
         let ma10 = IndicatorEngine.ma(data, period: 10).compactMap { $0 }
         let ma20 = IndicatorEngine.ma(data, period: 20).compactMap { $0 }
+        let ma60 = IndicatorEngine.ma(data, period: 60).compactMap { $0 }
         
-        guard ma5.count >= 3, ma10.count >= 3 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "均线系统", detail: "计算中")
+        guard let m5 = ma5.last, let m10 = ma10.last,
+              let m20 = ma20.last, let m60 = ma60.last else {
+            return SignalBreakdown(name: "均线", score: 0, weight: weight)
         }
         
-        let cm5 = ma5.last ?? 0
-        let pm5 = ma5[safe: ma5.count - 2] ?? 0
-        let cm10 = ma10.last ?? 0
-        let pm10 = ma10[safe: ma10.count - 2] ?? 0
-        let cm20 = ma20.last ?? 0
-        
-        // MA5上穿MA10
-        if pm5 <= pm10 && cm5 > cm10 {
-            var strength = 65
-            if cm5 > cm20 { strength += 10 } // 同时在MA20之上
-            return TradeSignal(type: .buy, strength: strength, description: "MA5金叉MA10", detail: nil)
+        // 多头排列：MA5 > MA10 > MA20 > MA60
+        if m5 > m10 && m10 > m20 && m20 > m60 {
+            let spread = ((m5 - m60) / m60 * 100)
+            let score = min(Int(spread * 3), 70)
+            return SignalBreakdown(name: "多头排列", score: score, weight: weight)
         }
-        // MA5下穿MA10
-        if pm5 >= pm10 && cm5 < cm10 {
-            var strength = 65
-            if cm5 < cm20 { strength += 10 } // 同时在MA20之下
-            return TradeSignal(type: .sell, strength: strength, description: "MA5死叉MA10", detail: nil)
+        // 空头排列：MA5 < MA10 < MA20 < MA60
+        if m5 < m10 && m10 < m20 && m20 < m60 {
+            let spread = ((m60 - m5) / m60 * 100)
+            let score = min(Int(spread * 3), 70)
+            return SignalBreakdown(name: "空头排列", score: -score, weight: weight)
         }
         
-        // 多头排列 MA5 > MA10 > MA20
-        if cm5 > cm10 && cm10 > cm20 {
-            return TradeSignal(type: .buy, strength: 55, description: "多头排列", detail: "MA5>MA10>MA20")
+        // 局部排列：看价格相对MA20位置
+        guard let close = data.last?.close else {
+            return SignalBreakdown(name: "均线", score: 0, weight: weight)
         }
-        // 空头排列
-        if cm5 < cm10 && cm10 < cm20 {
-            return TradeSignal(type: .sell, strength: 55, description: "空头排列", detail: "MA5<MA10<MA20")
-        }
-        
-        return TradeSignal(type: .neutral, strength: 50, description: "均线", detail: "无明显信号")
+        let score = Int((close - m20) / m20 * 200)
+        return SignalBreakdown(name: "均线", score: max(-40, min(40, score)), weight: weight)
     }
     
-    // MARK: - 多周期共振（简化版）
-    static func multiPeriodResonance(_ data: [Kline]) -> TradeSignal {
-        // 同一数据上模拟多周期：用不同EMA对比
-        guard data.count >= 30 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "多周期共振", detail: "数据不足")
-        }
-        
-        // 短期、中期、长期EMA方向
-        let ema5 = IndicatorEngine.ema(data, period: 5).compactMap { $0 }
-        let ema20 = IndicatorEngine.ema(data, period: 20).compactMap { $0 }
-        let ema60 = IndicatorEngine.ema(data, period: 60).compactMap { $0 }
-        
-        guard ema5.count >= 3, ema20.count >= 3 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "多周期共振", detail: "计算中")
-        }
-        
-        let e5 = (ema5.last ?? 0) - (ema5[safe: ema5.count - 2] ?? 0)
-        let e20 = (ema20.last ?? 0) - (ema20[safe: ema20.count - 2] ?? 0)
-        let e60 = ema60.count >= 3 ? (ema60.last ?? 0) - (ema60[safe: ema60.count - 2] ?? 0) : 0
-        
-        let upCount = [e5, e20, e60].filter { $0 > 0 }.count
-        let downCount = [e5, e20, e60].filter { $0 < 0 }.count
-        
-        if upCount >= 2 {
-            return TradeSignal(type: .buy, strength: min(50 + upCount * 12, 85), description: "多周期看涨共振",
-                              detail: "\(upCount)/3周期向上")
-        }
-        if downCount >= 2 {
-            return TradeSignal(type: .sell, strength: min(50 + downCount * 12, 85), description: "多周期看跌共振",
-                              detail: "\(downCount)/3周期向下")
-        }
-        
-        return TradeSignal(type: .neutral, strength: 50, description: "多周期", detail: "方向不一致")
-    }
-    
-    // MARK: - 成交量异常
-    static func volumeAnomaly(_ data: [Kline]) -> TradeSignal {
-        guard data.count >= 21 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "成交量", detail: "数据不足")
-        }
-        
-        let volumes = data.map { $0.volume }
-        let recent = volumes.suffix(20)
-        let avgVolume = recent.dropLast().reduce(0, +) / Double(recent.count - 1)
-        let lastVolume = volumes.last ?? 0
-        
-        guard avgVolume > 0 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "成交量", detail: "数据异常")
-        }
-        
-        let ratio = lastVolume / avgVolume
-        
-        if ratio >= 2.0, let lastClose = data.last?.close, let prevClose = data.dropLast().last?.close {
-            if lastClose >= prevClose {
-                return TradeSignal(type: .buy, strength: 70, description: "放量上涨",
-                                  detail: String(format: "量比%.1f倍", ratio))
-            } else {
-                return TradeSignal(type: .sell, strength: 70, description: "放量下跌",
-                                  detail: String(format: "量比%.1f倍", ratio))
-            }
-        }
-        
-        if ratio <= 0.5 {
-            return TradeSignal(type: .neutral, strength: 40, description: "缩量", detail: String(format: "量比%.1f倍", ratio))
-        }
-        
-        return TradeSignal(type: .neutral, strength: 50, description: "成交量正常", detail: nil)
-    }
-    
-    // MARK: - 威廉指标
-    static func williamsSignal(_ data: [Kline]) -> TradeSignal {
+    // MARK: - 7. CCI
+    private static func scoreCCI(_ data: [Kline], weight: Double) -> SignalBreakdown {
         guard data.count >= 20 else {
-            return TradeSignal(type: .neutral, strength: 50, description: "威廉指标", detail: "数据不足")
+            return SignalBreakdown(name: "CCI", score: 0, weight: weight)
         }
         
-        let wr = IndicatorEngine.williamsR(data)
-        guard let lastWR = wr.last ?? nil else {
-            return TradeSignal(type: .neutral, strength: 50, description: "威廉指标", detail: "计算中")
+        let cciValues = IndicatorEngine.cci(data)
+        guard let lastCCI = cciValues.compactMap({ $0 }).last else {
+            return SignalBreakdown(name: "CCI", score: 0, weight: weight)
         }
         
-        if lastWR <= -80 {
-            return TradeSignal(type: .buy, strength: 75, description: "威廉超卖",
-                              detail: String(format: "W%%R=%.1f ≤ -80", lastWR))
-        } else if lastWR >= -20 {
-            return TradeSignal(type: .sell, strength: 75, description: "威廉超买",
-                              detail: String(format: "W%%R=%.1f ≥ -20", lastWR))
+        // CCI > +100 = 超买 → 偏空；CCI < -100 = 超卖 → 偏多
+        if lastCCI > 100 {
+            let score = min(Int((lastCCI - 100) * 0.5), 60)
+            return SignalBreakdown(name: "CCI超买", score: -score, weight: weight)
+        }
+        if lastCCI < -100 {
+            let score = min(Int((-100 - lastCCI) * 0.5), 60)
+            return SignalBreakdown(name: "CCI超卖", score: score, weight: weight)
         }
         
-        return TradeSignal(type: .neutral, strength: 50, description: "威廉正常", detail: nil)
+        // 线性映射 -100~+100 → -40~+40
+        let score = Int((lastCCI / 100) * 40)
+        return SignalBreakdown(name: "CCI", score: max(-40, min(40, score)), weight: weight)
     }
     
-    // MARK: - 逐K线信号检测（用于图表标记）
-    /// 止损规则（参照口碑贵金属）：
-    /// - 多头信号 → 止损 = 该信号K线的最低点
-    /// - 空头信号 → 止损 = 该信号K线的最高点
-    /// 止盈规则：1:1 盈亏比（止损距离=止盈距离）
-    static func detectPerCandleSignals(_ data: [Kline]) -> [SignalMarker] {
-        guard data.count >= 50 else { return [] }
-        var markers: [SignalMarker] = []
+    // MARK: - 8. MFI
+    private static func scoreMFI(_ data: [Kline], weight: Double) -> SignalBreakdown {
+        guard data.count >= 20 else {
+            return SignalBreakdown(name: "MFI", score: 0, weight: weight)
+        }
         
-        // 1. MACD金叉/死叉 + 顶底背离
-        let macdResult = IndicatorEngine.macd(data)
-        let histogram = macdResult.histogram.compactMap { $0 }
-        let dif = macdResult.dif.compactMap { $0 }
-        let dea = macdResult.dea.compactMap { $0 }
+        let mfiValues = IndicatorEngine.mfi(data)
+        guard let lastMFI = mfiValues.compactMap({ $0 }).last else {
+            return SignalBreakdown(name: "MFI", score: 0, weight: weight)
+        }
         
-        // DIF偏移量（计算macd.startIdx）
-        let difOffset = data.count - dif.count
-        let histOffset = data.count - histogram.count
+        // MFI < 20 = 超卖；MFI > 80 = 超买
+        if lastMFI <= 20 {
+            let score = min(Int((20 - lastMFI) * 3), 60)
+            return SignalBreakdown(name: "MFI超卖", score: score, weight: weight)
+        }
+        if lastMFI >= 80 {
+            let score = min(Int((lastMFI - 80) * 3), 60)
+            return SignalBreakdown(name: "MFI超买", score: -score, weight: weight)
+        }
         
-        // MACD金叉（DIF上穿DEA）
-        for i in 1..<dif.count {
-            let idx = difOffset + i
-            guard i < dea.count else { break }
-            let prevD = dif[safe: i-1] ?? 0
-            let currD = dif[i]
-            let prevE = dea[safe: i-1] ?? 0
-            let currE = dea[i]
-            
-            // 金叉且在零轴附近或以下
-            if prevD <= prevE && currD > currE && currD < 20 {
-                let price = data[idx].close
-                let sl   = data[idx].low            // 止损 = 该K线最低点
-                let risk = price - sl
-                markers.append(SignalMarker(
-                    candleIndex: idx, type: .longOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price + risk,
-                    strength: 75, source: "MACD金叉",
-                    timestamp: data[idx].timestamp
-                ))
-            }
-            // 死叉
-            if prevD >= prevE && currD < currE && currD > -20 {
-                let price = data[idx].close
-                let sl   = data[idx].high            // 止损 = 该K线最高点
-                let risk = sl - price
-                markers.append(SignalMarker(
-                    candleIndex: idx, type: .shortOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price - risk,
-                    strength: 75, source: "MACD死叉",
-                    timestamp: data[idx].timestamp
-                ))
+        let score = Int((lastMFI - 50) * 1.5)
+        return SignalBreakdown(name: "MFI", score: max(-40, min(40, score)), weight: weight)
+    }
+    
+    // MARK: - 9. ADX
+    private static func scoreADX(_ data: [Kline], weight: Double) -> SignalBreakdown {
+        guard data.count >= 30 else {
+            return SignalBreakdown(name: "ADX", score: 0, weight: weight)
+        }
+        
+        let (pdi, mdi, adxValues) = IndicatorEngine.directionalIndicators(data)
+        guard let adx = adxValues.compactMap({ $0 }).last,
+              let plusDI = pdi.compactMap({ $0 }).last,
+              let minusDI = mdi.compactMap({ $0 }).last else {
+            return SignalBreakdown(name: "ADX", score: 0, weight: weight)
+        }
+        
+        // ADX < 20 = 震荡无趋势
+        if adx < 20 {
+            return SignalBreakdown(name: "ADX震荡", score: 0, weight: weight)
+        }
+        
+        // ADX >= 20 = 趋势行情，方向由+DI和-DI决定
+        let diff = plusDI - minusDI
+        let strength = min(Int(abs(diff) * 1.5), 60)
+        
+        if diff > 0 {
+            return SignalBreakdown(name: "ADX多头", score: strength, weight: weight)
+        }
+        return SignalBreakdown(name: "ADX空头", score: -strength, weight: weight)
+    }
+    
+    // MARK: - 10. 威廉%R
+    private static func scoreWilliams(_ data: [Kline], weight: Double) -> SignalBreakdown {
+        guard data.count >= 20 else {
+            return SignalBreakdown(name: "威廉%R", score: 0, weight: weight)
+        }
+        
+        let wrValues = IndicatorEngine.williamsR(data)
+        guard let lastWR = wrValues.compactMap({ $0 }).last else {
+            return SignalBreakdown(name: "威廉%R", score: 0, weight: weight)
+        }
+        
+        // WR 范围 -100~0, < -80 = 超卖(偏多), > -20 = 超买(偏空)
+        if lastWR <= -80 {
+            let score = min(Int((-80 - lastWR) * 2), 60)
+            return SignalBreakdown(name: "威廉超卖", score: score, weight: weight)
+        }
+        if lastWR >= -20 {
+            let score = min(Int((lastWR + 20) * 2), 60)
+            return SignalBreakdown(name: "威廉超买", score: -score, weight: weight)
+        }
+        
+        let score = Int((lastWR + 50) * 1.5)
+        return SignalBreakdown(name: "威廉%R", score: max(-40, min(40, score)), weight: weight)
+    }
+    
+    // MARK: - 11. K线形态
+    private static func scoreCandlestick(_ data: [Kline], weight: Double) -> SignalBreakdown {
+        guard data.count >= 10 else {
+            return SignalBreakdown(name: "K线形态", score: 0, weight: weight)
+        }
+        
+        guard let last = data.last, let prev = data[safe: data.count - 2],
+              let prev2 = data[safe: data.count - 3] else {
+            return SignalBreakdown(name: "K线形态", score: 0, weight: weight)
+        }
+        
+        let body = abs(last.close - last.open)
+        let upperShadow = last.high - max(last.open, last.close)
+        let lowerShadow = min(last.open, last.close) - last.low
+        let totalRange = last.high - last.low
+        
+        guard totalRange > 0 else {
+            return SignalBreakdown(name: "K线形态", score: 0, weight: weight)
+        }
+        
+        let bodyRatio = body / totalRange
+        let upperRatio = upperShadow / totalRange
+        let lowerRatio = lowerShadow / totalRange
+        
+        // 锤子线（低位反转 → 多头）
+        // 下影线>2倍实体, 上影线很短
+        if lowerRatio > 0.6 && upperRatio < 0.1 && bodyRatio < 0.3 {
+            // 确认出现在下降趋势中
+            let trend = prev.close < prev2.close
+            if trend {
+                return SignalBreakdown(name: "锤子线", score: 50, weight: weight)
             }
         }
         
-        // 2. KDJ金叉/死叉
-        let kdjResult = IndicatorEngine.kdj(data)
-        let k = kdjResult.k.compactMap { $0 }
-        let d = kdjResult.d.compactMap { $0 }
-        let kdjOffset = data.count - k.count
-        
-        for i in 1..<k.count {
-            let idx = kdjOffset + i
-            guard i < d.count else { break }
-            let pk = k[safe: i-1] ?? 50
-            let ck = k[i]
-            let pd = d[safe: i-1] ?? 50
-            let cd = d[i]
-            
-            // 低位金叉
-            if pk <= pd && ck > cd && ck < 30 {
-                let price = data[idx].close
-                let sl    = data[idx].low           // 止损 = 该K线最低点
-                let risk  = price - sl
-                markers.append(SignalMarker(
-                    candleIndex: idx, type: .longOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price + risk,
-                    strength: 70, source: "KDJ金叉",
-                    timestamp: data[idx].timestamp
-                ))
-            }
-            // 高位死叉
-            if pk >= pd && ck < cd && ck > 70 {
-                let price = data[idx].close
-                let sl    = data[idx].high           // 止损 = 该K线最高点
-                let risk  = sl - price
-                markers.append(SignalMarker(
-                    candleIndex: idx, type: .shortOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price - risk,
-                    strength: 70, source: "KDJ死叉",
-                    timestamp: data[idx].timestamp
-                ))
+        // 射击之星（高位反转 → 空头）
+        // 上影线>2倍实体, 下影线很短
+        if upperRatio > 0.6 && lowerRatio < 0.1 && bodyRatio < 0.3 {
+            let trend = prev.close > prev2.close
+            if trend {
+                return SignalBreakdown(name: "射击之星", score: -50, weight: weight)
             }
         }
         
-        // 3. RSI超卖/超买
-        let rsiValues = IndicatorEngine.rsi(data)
-        let rsiOffset = data.count - rsiValues.count
-        for i in 0..<rsiValues.count {
-            guard let r = rsiValues[i] else { continue }
-            let idx = rsiOffset + i
-            guard idx > 0 else { continue }
-            let prevR: Double = rsiValues[safe: i-1].flatMap { $0 } ?? 50
-            
-            // RSI从超卖区上穿30
-            if prevR < 30 && r >= 30 && r < 50 {
-                let price = data[idx].close
-                let sl    = data[idx].low            // 止损 = 该K线最低点
-                let risk  = price - sl
-                markers.append(SignalMarker(
-                    candleIndex: idx, type: .longOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price + risk,
-                    strength: 65, source: "RSI超卖",
-                    timestamp: data[idx].timestamp
-                ))
-            }
-            // RSI从超买区下穿70
-            if prevR > 70 && r <= 70 && r > 50 {
-                let price = data[idx].close
-                let sl    = data[idx].high            // 止损 = 该K线最高点
-                let risk  = sl - price
-                markers.append(SignalMarker(
-                    candleIndex: idx, type: .shortOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price - risk,
-                    strength: 65, source: "RSI超买",
-                    timestamp: data[idx].timestamp
-                ))
-            }
+        // 看涨吞没
+        if last.close > last.open && prev.close < prev.open &&
+           last.close > prev.open && last.open < prev.close {
+            return SignalBreakdown(name: "看涨吞没", score: 55, weight: weight)
         }
         
-        // 4. 布林带上下轨
-        let boll = IndicatorEngine.bollinger(data)
-        for i in 0..<data.count {
-            guard let upper = boll.upper[safe: i] ?? nil,
-                  let lower = boll.lower[safe: i] ?? nil else { continue }
-            let close = data[i].close
-            
-            // 价格触及下轨
-            if close <= lower && i > 5 {
-                let price = close
-                let sl    = data[i].low              // 止损 = 该K线最低点
-                let risk  = price - sl
-                markers.append(SignalMarker(
-                    candleIndex: i, type: .longOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price + risk,
-                    strength: 60, source: "布林下轨",
-                    timestamp: data[i].timestamp
-                ))
-            }
-            // 价格触及上轨
-            if close >= upper && i > 5 {
-                let price = close
-                let sl    = data[i].high              // 止损 = 该K线最高点
-                let risk  = sl - price
-                markers.append(SignalMarker(
-                    candleIndex: i, type: .shortOpen,
-                    price: price, stopLoss: sl,
-                    stopTarget: price - risk,
-                    strength: 60, source: "布林上轨",
-                    timestamp: data[i].timestamp
-                ))
-            }
+        // 看跌吞没
+        if last.close < last.open && prev.close > prev.open &&
+           last.close < prev.open && last.open > prev.close {
+            return SignalBreakdown(name: "看跌吞没", score: -55, weight: weight)
         }
         
-        // 5. 处理联动信号：多→空触发器 平多开空
-        var linkedMarkers: [SignalMarker] = []
-        let sorted = markers.sorted { $0.candleIndex < $1.candleIndex }
-        var lastLongIdx = -1
-        var lastShortIdx = -1
-        
-        for m in sorted {
-            if m.type == .longOpen {
-                lastLongIdx = m.candleIndex
-            } else if m.type == .shortOpen && lastLongIdx >= 0 {
-                let gap = m.candleIndex - lastLongIdx
-                if gap > 0 && gap < 30 {
-                    linkedMarkers.append(SignalMarker(
-                        candleIndex: m.candleIndex - 1,
-                        type: .longClose,
-                        price: data[m.candleIndex - 1].close,
-                        stopLoss: nil,
-                        stopTarget: nil,
-                        strength: 80,
-                        source: "平多",
-                        timestamp: data[m.candleIndex - 1].timestamp
-                    ))
-                }
-                lastLongIdx = -1
-            }
-            if m.type == .shortOpen {
-                lastShortIdx = m.candleIndex
-            } else if m.type == .longOpen && lastShortIdx >= 0 {
-                let gap = m.candleIndex - lastShortIdx
-                if gap > 0 && gap < 30 {
-                    linkedMarkers.append(SignalMarker(
-                        candleIndex: m.candleIndex - 1,
-                        type: .shortClose,
-                        price: data[m.candleIndex - 1].close,
-                        stopLoss: nil,
-                        stopTarget: nil,
-                        strength: 80,
-                        source: "平空",
-                        timestamp: data[m.candleIndex - 1].timestamp
-                    ))
-                }
-                lastShortIdx = -1
-            }
+        // 连续走势判断：看最后3根K线的实体方向
+        let lastBody = last.close - last.open
+        let prevBody = prev.close - prev.open
+        if lastBody > 0 && prevBody > 0 {
+            let avg = (lastBody + prevBody) / 2
+            let closePrice = last.close
+            let strength = min(Int(avg / closePrice * 200), 30)
+            return SignalBreakdown(name: "K线上涨", score: strength, weight: weight)
+        }
+        if lastBody < 0 && prevBody < 0 {
+            let avg = (abs(lastBody) + abs(prevBody)) / 2
+            let closePrice = last.close
+            let strength = min(Int(avg / closePrice * 200), 30)
+            return SignalBreakdown(name: "K线下跌", score: -strength, weight: weight)
         }
         
-        markers.append(contentsOf: linkedMarkers)
-        
-        // 6. 去重：同K线同类型只保留最强
-        var deduped: [SignalMarker] = []
-        var seen = Set<String>()
-        for m in markers.sorted(by: { $0.strength > $1.strength }) {
-            let key = "\(m.candleIndex)-\(m.type.rawValue)"
-            if seen.insert(key).inserted {
-                deduped.append(m)
-            }
-        }
-        
-        return deduped.sorted { $0.candleIndex < $1.candleIndex }
+        return SignalBreakdown(name: "K线形态", score: 0, weight: weight)
     }
 }

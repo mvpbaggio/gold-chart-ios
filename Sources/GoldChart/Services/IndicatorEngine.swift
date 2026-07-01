@@ -203,6 +203,133 @@ class IndicatorEngine {
         return result
     }
     
+    // MARK: - CCI (商品通道指数)
+    static func cci(_ data: [Kline], period: Int = 20) -> [Double?] {
+        guard data.count >= period else { return Array(repeating: nil, count: data.count) }
+        var result: [Double?] = Array(repeating: nil, count: data.count)
+        
+        for i in (period - 1)..<data.count {
+            let start = i - period + 1
+            let typicalPrices = data[start...i].map { ($0.high + $0.low + $0.close) / 3.0 }
+            let meanTP = typicalPrices.reduce(0, +) / Double(period)
+            let meanDev = typicalPrices.reduce(0) { $0 + abs($1 - meanTP) } / Double(period)
+            let tp = (data[i].high + data[i].low + data[i].close) / 3.0
+            result[i] = meanDev == 0 ? 0 : (tp - meanTP) / (0.015 * meanDev)
+        }
+        return result
+    }
+    
+    // MARK: - MFI (资金流向指数)
+    static func mfi(_ data: [Kline], period: Int = 14) -> [Double?] {
+        guard data.count > period else { return Array(repeating: nil, count: data.count) }
+        var result: [Double?] = Array(repeating: nil, count: data.count)
+        var rawFlows: [Double] = []
+        var positiveFlowFlag: [Bool] = []
+        
+        for i in 0..<data.count {
+            let tp = (data[i].high + data[i].low + data[i].close) / 3.0
+            let rawFlow = tp * data[i].volume
+            rawFlows.append(rawFlow)
+            
+            if i > 0 {
+                let prevTP = (data[i-1].high + data[i-1].low + data[i-1].close) / 3.0
+                positiveFlowFlag.append(tp >= prevTP)
+            }
+        }
+        
+        guard rawFlows.count > period, positiveFlowFlag.count >= period else { return result }
+        
+        for i in period..<data.count {
+            var posFlow: Double = 0
+            var negFlow: Double = 0
+            for j in (i - period)..<i {
+                if positiveFlowFlag[j] {
+                    posFlow += rawFlows[j]
+                } else {
+                    negFlow += rawFlows[j]
+                }
+            }
+            let mfr = negFlow == 0 ? 100 : posFlow / negFlow
+            result[i] = 100 - (100 / (1 + mfr))
+        }
+        return result
+    }
+    
+    // MARK: - DI (方向指标) — 供ADX使用
+    static func directionalIndicators(_ data: [Kline], period: Int = 14) -> (plusDI: [Double?], minusDI: [Double?], adx: [Double?]) {
+        guard data.count > period + 1 else {
+            return (Array(repeating: nil, count: data.count), Array(repeating: nil, count: data.count), Array(repeating: nil, count: data.count))
+        }
+        
+        var plusDM: [Double] = []
+        var minusDM: [Double] = []
+        var tr: [Double] = []
+        
+        for i in 1..<data.count {
+            let upMove = data[i].high - data[i-1].high
+            let downMove = data[i-1].low - data[i].low
+            
+            let pDM = upMove > downMove && upMove > 0 ? upMove : 0
+            let mDM = downMove > upMove && downMove > 0 ? downMove : 0
+            plusDM.append(pDM)
+            minusDM.append(mDM)
+            
+            let hl = data[i].high - data[i].low
+            let hc = abs(data[i].high - data[i-1].close)
+            let lc = abs(data[i].low - data[i-1].close)
+            tr.append(max(hl, hc, lc))
+        }
+        
+        guard tr.count >= period else {
+            return (Array(repeating: nil, count: data.count), Array(repeating: nil, count: data.count), Array(repeating: nil, count: data.count))
+        }
+        
+        var resultPDI: [Double?] = Array(repeating: nil, count: data.count)
+        var resultMDI: [Double?] = Array(repeating: nil, count: data.count)
+        var resultADX: [Double?] = Array(repeating: nil, count: data.count)
+        
+        var sumPDM = plusDM[0..<period].reduce(0, +)
+        var sumMDM = minusDM[0..<period].reduce(0, +)
+        var sumTR = tr[0..<period].reduce(0, +)
+        
+        for i in (period)..<tr.count {
+            let idx = i + 1
+            sumPDM = sumPDM - sumPDM / Double(period) + plusDM[i]
+            sumMDM = sumMDM - sumMDM / Double(period) + minusDM[i]
+            sumTR = sumTR - sumTR / Double(period) + tr[i]
+            
+            if sumTR == 0 { continue }
+            let pdi = sumPDM / sumTR * 100
+            let mdi = sumMDM / sumTR * 100
+            resultPDI[idx] = pdi
+            resultMDI[idx] = mdi
+        }
+        
+        // ADX
+        var dxSum: Double = 0
+        var dxCount = 0
+        for i in 0..<resultPDI.count {
+            guard let pdi = resultPDI[i], let mdi = resultMDI[i] else { continue }
+            let diff = abs(pdi - mdi)
+            let sum = pdi + mdi
+            if sum == 0 { continue }
+            let dx = diff / sum * 100
+            
+            if dxCount < period {
+                dxSum += dx
+                dxCount += 1
+                if dxCount == period {
+                    resultADX[i] = dxSum / Double(period)
+                }
+            } else {
+                let prevADX = resultADX[i-1] ?? dx
+                resultADX[i] = (prevADX * Double(period - 1) + dx) / Double(period)
+            }
+        }
+        
+        return (resultPDI, resultMDI, resultADX)
+    }
+    
     // MARK: - OBV (能量潮)
     static func obv(_ data: [Kline]) -> [Double?] {
         guard data.count >= 1 else { return [] }
