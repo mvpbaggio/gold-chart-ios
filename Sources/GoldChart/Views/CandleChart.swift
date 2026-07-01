@@ -33,9 +33,24 @@ struct CandleChartContainer: UIViewRepresentable {
                 return ""
             }
         )
+        
+        // 实时价格横线（所有LimitLine之前插入，注意removeAllLimitLines清除它，所以最后画）
+        let leftAxis = chart.leftAxis
+        leftAxis.removeAllLimitLines()
+        
+        let currentPrice = klines.last?.close ?? 0
+        if currentPrice > 0 {
+            let liveLl = ChartLimitLine(limit: currentPrice, label: "$\(String(format: "%.2f", currentPrice))")
+            liveLl.labelPosition = .rightTop
+            liveLl.lineWidth = 1.5
+            liveLl.lineColor = UIColor.gray.withAlphaComponent(0.5)
+            liveLl.valueTextColor = UIColor.gray.withAlphaComponent(0.7)
+            liveLl.valueFont = UIFont.boldSystemFont(ofSize: 10)
+            leftAxis.addLimitLine(liveLl)
+        }
+        
+        // 止损线
         if viewModel.showStopLoss {
-            let leftAxis = chart.leftAxis
-            leftAxis.removeAllLimitLines()
             for level in viewModel.stopLossLevels {
                 let ll = ChartLimitLine(limit: level.price, label: level.label)
                 ll.labelPosition = .rightTop
@@ -73,19 +88,6 @@ struct CandleChartContainer: UIViewRepresentable {
         leftAxis.labelTextColor = UIColor(AppColors.textTertiary)
         leftAxis.gridColor = UIColor(AppColors.cardBorder)
         leftAxis.labelPosition = .outsideChart
-        
-        // 止损线
-        if viewModel.showStopLoss {
-            leftAxis.removeAllLimitLines()
-            for level in viewModel.stopLossLevels {
-                let ll = ChartLimitLine(limit: level.price, label: level.label)
-                ll.labelPosition = .rightTop
-                ll.lineWidth = 1
-                ll.lineDashLengths = [4, 4]
-                ll.valueTextColor = UIColor(level.color == "#EF4444" ? AppColors.red : AppColors.green)
-                leftAxis.addLimitLine(ll)
-            }
-        }
         
         // 右Y轴
         let rightAxis = chart.rightAxis
