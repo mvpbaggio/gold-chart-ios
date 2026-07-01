@@ -121,7 +121,7 @@ struct CandleChartContainer: UIViewRepresentable {
         
         if !longEntries.isEmpty {
             let longSet = ScatterChartDataSet(entries: longEntries, label: "多")
-            longSet.scatterShape = .triangle
+            longSet.setScatterShape(.triangle)
             longSet.setColor(UIColor(AppColors.red))
             longSet.scatterShapeSize = 12
             longSet.drawValuesEnabled = true
@@ -139,7 +139,7 @@ struct CandleChartContainer: UIViewRepresentable {
         
         if !shortEntries.isEmpty {
             let shortSet = ScatterChartDataSet(entries: shortEntries, label: "空")
-            shortSet.scatterShape = .chevronDown
+            shortSet.setScatterShape(.chevronDown)
             shortSet.setColor(UIColor(AppColors.green))
             shortSet.scatterShapeSize = 12
             shortSet.drawValuesEnabled = true
@@ -157,7 +157,7 @@ struct CandleChartContainer: UIViewRepresentable {
         
         if !closeEntries.isEmpty {
             let closeSet = ScatterChartDataSet(entries: closeEntries, label: "平")
-            closeSet.scatterShape = .circle
+            closeSet.setScatterShape(.circle)
             closeSet.setColor(UIColor(AppColors.gold))
             closeSet.scatterShapeSize = 8
             closeSet.drawValuesEnabled = true
@@ -240,7 +240,7 @@ class SignalMarkerView: MarkerView {
     
     override func refreshContent(entry: ChartDataEntry, highlight: Highlight) {
         let idx = Int(entry.x)
-        let signals = viewModel.signalMarkers.filter { $0.candleIndex == idx }
+        _ = viewModel.signalMarkers.filter { $0.candleIndex == idx }
         // 由SwiftUI overlay处理显示
         super.refreshContent(entry: entry, highlight: highlight)
     }

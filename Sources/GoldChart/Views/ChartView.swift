@@ -33,7 +33,7 @@ struct ChartView: View {
                             )
                             .frame(height: 320)
                             .padding(.horizontal, 4)
-                            .onTapGesture { location in
+                            .onTapGesture {
                                 showSignalDetail = true
                             }
                             
@@ -417,7 +417,7 @@ struct ChartView: View {
 @available(iOS 14.0, *)
 struct SignalDetailSheet: View {
     @ObservedObject var viewModel: ChartViewModel
-    @Environment(\.dismiss) var dismiss
+    @Environment(\.presentationMode) var presentationMode
     
     var body: some View {
         NavigationView {
@@ -452,7 +452,7 @@ struct SignalDetailSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button("关闭") { dismiss() }
+                    Button("关闭") { presentationMode.wrappedValue.dismiss() }
                 }
             }
         }

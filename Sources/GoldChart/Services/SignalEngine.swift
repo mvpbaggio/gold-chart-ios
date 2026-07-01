@@ -421,7 +421,7 @@ class SignalEngine {
             guard let r = rsiValues[i] else { continue }
             let idx = rsiOffset + i
             guard idx > 0 else { continue }
-            let prevR = rsiValues[safe: i-1] ?? 50
+            let prevR: Double = rsiValues[safe: i-1].flatMap { $0 } ?? 50
             
             // RSI从超卖区上穿30
             if prevR < 30 && r >= 30 && r < 50 {
