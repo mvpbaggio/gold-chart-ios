@@ -317,6 +317,10 @@ class SignalEngine {
     }
     
     // MARK: - 逐K线信号检测（用于图表标记）
+    /// 止损规则（参照口碑贵金属）：
+    /// - 多头信号 → 止损 = 该信号K线的最低点
+    /// - 空头信号 → 止损 = 该信号K线的最高点
+    /// 止盈规则：1:1 盈亏比（止损距离=止盈距离）
     static func detectPerCandleSignals(_ data: [Kline]) -> [SignalMarker] {
         guard data.count >= 50 else { return [] }
         var markers: [SignalMarker] = []
@@ -342,24 +346,26 @@ class SignalEngine {
             
             // 金叉且在零轴附近或以下
             if prevD <= prevE && currD > currE && currD < 20 {
-                let price = data[idx].low
-                let sl = price - (data[idx].high - data[idx].low) * 1.5
+                let price = data[idx].close
+                let sl   = data[idx].low            // 止损 = 该K线最低点
+                let risk = price - sl
                 markers.append(SignalMarker(
                     candleIndex: idx, type: .longOpen,
-                    price: price, stopLoss: max(sl, price * 0.97),
-                    stopTarget: price + (price - max(sl, price * 0.97)),
+                    price: price, stopLoss: sl,
+                    stopTarget: price + risk,
                     strength: 75, source: "MACD金叉",
                     timestamp: data[idx].timestamp
                 ))
             }
             // 死叉
             if prevD >= prevE && currD < currE && currD > -20 {
-                let price = data[idx].high
-                let sl = price + (data[idx].high - data[idx].low) * 1.5
+                let price = data[idx].close
+                let sl   = data[idx].high            // 止损 = 该K线最高点
+                let risk = sl - price
                 markers.append(SignalMarker(
                     candleIndex: idx, type: .shortOpen,
-                    price: price, stopLoss: min(sl, price * 1.03),
-                    stopTarget: price - (min(sl, price * 1.03) - price),
+                    price: price, stopLoss: sl,
+                    stopTarget: price - risk,
                     strength: 75, source: "MACD死叉",
                     timestamp: data[idx].timestamp
                 ))
@@ -382,22 +388,26 @@ class SignalEngine {
             
             // 低位金叉
             if pk <= pd && ck > cd && ck < 30 {
+                let price = data[idx].close
+                let sl    = data[idx].low           // 止损 = 该K线最低点
+                let risk  = price - sl
                 markers.append(SignalMarker(
                     candleIndex: idx, type: .longOpen,
-                    price: data[idx].close,
-                    stopLoss: data[idx].low * 0.985,
-                    stopTarget: data[idx].close + (data[idx].close - data[idx].low * 0.985),
+                    price: price, stopLoss: sl,
+                    stopTarget: price + risk,
                     strength: 70, source: "KDJ金叉",
                     timestamp: data[idx].timestamp
                 ))
             }
             // 高位死叉
             if pk >= pd && ck < cd && ck > 70 {
+                let price = data[idx].close
+                let sl    = data[idx].high           // 止损 = 该K线最高点
+                let risk  = sl - price
                 markers.append(SignalMarker(
                     candleIndex: idx, type: .shortOpen,
-                    price: data[idx].close,
-                    stopLoss: data[idx].high * 1.015,
-                    stopTarget: data[idx].close - (data[idx].high * 1.015 - data[idx].close),
+                    price: price, stopLoss: sl,
+                    stopTarget: price - risk,
                     strength: 70, source: "KDJ死叉",
                     timestamp: data[idx].timestamp
                 ))
@@ -415,23 +425,27 @@ class SignalEngine {
             
             // RSI从超卖区上穿30
             if prevR < 30 && r >= 30 && r < 50 {
+                let price = data[idx].close
+                let sl    = data[idx].low            // 止损 = 该K线最低点
+                let risk  = price - sl
                 markers.append(SignalMarker(
                     candleIndex: idx, type: .longOpen,
-                    price: data[idx].close,
-                    stopLoss: data[idx].low * 0.98,
-                    stopTarget: data[idx].close + (data[idx].close - data[idx].low * 0.98),
-                    strength: 65, source: "RSI超卖反弹",
+                    price: price, stopLoss: sl,
+                    stopTarget: price + risk,
+                    strength: 65, source: "RSI超卖",
                     timestamp: data[idx].timestamp
                 ))
             }
             // RSI从超买区下穿70
             if prevR > 70 && r <= 70 && r > 50 {
+                let price = data[idx].close
+                let sl    = data[idx].high            // 止损 = 该K线最高点
+                let risk  = sl - price
                 markers.append(SignalMarker(
                     candleIndex: idx, type: .shortOpen,
-                    price: data[idx].close,
-                    stopLoss: data[idx].high * 1.02,
-                    stopTarget: data[idx].close - (data[idx].high * 1.02 - data[idx].close),
-                    strength: 65, source: "RSI超买回调",
+                    price: price, stopLoss: sl,
+                    stopTarget: price - risk,
+                    strength: 65, source: "RSI超买",
                     timestamp: data[idx].timestamp
                 ))
             }
@@ -446,35 +460,33 @@ class SignalEngine {
             
             // 价格触及下轨
             if close <= lower && i > 5 {
-                let prevClose = data[i-1].close
-                if prevClose > lower || true {
-                    markers.append(SignalMarker(
-                        candleIndex: i, type: .longOpen,
-                        price: close,
-                        stopLoss: lower - (upper - lower) * 0.1,
-                        stopTarget: data[i].high + (data[i].high - close),
-                        strength: 60, source: "布林下轨",
-                        timestamp: data[i].timestamp
-                    ))
-                }
+                let price = close
+                let sl    = data[i].low              // 止损 = 该K线最低点
+                let risk  = price - sl
+                markers.append(SignalMarker(
+                    candleIndex: i, type: .longOpen,
+                    price: price, stopLoss: sl,
+                    stopTarget: price + risk,
+                    strength: 60, source: "布林下轨",
+                    timestamp: data[i].timestamp
+                ))
             }
             // 价格触及上轨
             if close >= upper && i > 5 {
-                let prevClose = data[i-1].close
-                if prevClose < upper || true {
-                    markers.append(SignalMarker(
-                        candleIndex: i, type: .shortOpen,
-                        price: close,
-                        stopLoss: upper + (upper - lower) * 0.1,
-                        stopTarget: data[i].low - (close - data[i].low),
-                        strength: 60, source: "布林上轨",
-                        timestamp: data[i].timestamp
-                    ))
-                }
+                let price = close
+                let sl    = data[i].high              // 止损 = 该K线最高点
+                let risk  = sl - price
+                markers.append(SignalMarker(
+                    candleIndex: i, type: .shortOpen,
+                    price: price, stopLoss: sl,
+                    stopTarget: price - risk,
+                    strength: 60, source: "布林上轨",
+                    timestamp: data[i].timestamp
+                ))
             }
         }
         
-        // 5. 处理联动信号：多→空触发器平多开空
+        // 5. 处理联动信号：多→空触发器 平多开空
         var linkedMarkers: [SignalMarker] = []
         let sorted = markers.sorted { $0.candleIndex < $1.candleIndex }
         var lastLongIdx = -1
@@ -486,7 +498,6 @@ class SignalEngine {
             } else if m.type == .shortOpen && lastLongIdx >= 0 {
                 let gap = m.candleIndex - lastLongIdx
                 if gap > 0 && gap < 30 {
-                    // 在多头开仓之后出现空头信号 → 平多开空
                     linkedMarkers.append(SignalMarker(
                         candleIndex: m.candleIndex - 1,
                         type: .longClose,
