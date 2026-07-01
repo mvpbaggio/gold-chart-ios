@@ -440,10 +440,10 @@ class SignalEngine {
             let cs = composite(prefix)
             let candle = data[i]
             
-            if cs.score >= 75 {
-                let stopLoss = candle.low       // 该K线最低点
+            if cs.score >= 40 {
+                let stopLoss = candle.low
                 let range = candle.close - stopLoss
-                let stopTarget = candle.close + range  // 1:1
+                let stopTarget = candle.close + range
                 signals.append(SignalMarker(
                     candleIndex: i,
                     type: .longOpen,
@@ -454,10 +454,10 @@ class SignalEngine {
                     source: "综合评分",
                     timestamp: candle.timestamp
                 ))
-            } else if cs.score <= -75 {
-                let stopLoss = candle.high       // 该K线最高点
+            } else if cs.score <= -40 {
+                let stopLoss = candle.high
                 let range = stopLoss - candle.close
-                let stopTarget = candle.close - range  // 1:1
+                let stopTarget = candle.close - range
                 signals.append(SignalMarker(
                     candleIndex: i,
                     type: .shortOpen,

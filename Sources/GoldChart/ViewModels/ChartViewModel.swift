@@ -172,6 +172,35 @@ class ChartViewModel: ObservableObject {
     /// 实时更新复合评分（每次即时报价变化时重算）
     private func recalcComposite() {
         compositeSignal = SignalEngine.composite(realtimeKlines)
+        // 实时评分达到阈值时添加信号
+        guard let cs = compositeSignal, let last = realtimeKlines.last, realtimeKlines.count >= 60 else { return }
+        let currentMarkers = signalMarkers
+        // 如果最后一个信号是实时评分且同一根K线，替换它
+        var filtered = currentMarkers.filter { $0.source != "实时评分" || $0.candleIndex < realtimeKlines.count - 1 }
+        if cs.score >= 40 {
+            let sl = last.low
+            let range = last.close - sl
+            filtered.append(SignalMarker(
+                candleIndex: realtimeKlines.count - 1,
+                type: .longOpen, price: last.close,
+                stopLoss: sl, stopTarget: last.close + range,
+                strength: min(cs.score, 100),
+                source: "实时评分",
+                timestamp: last.timestamp
+            ))
+        } else if cs.score <= -40 {
+            let sl = last.high
+            let range = sl - last.close
+            filtered.append(SignalMarker(
+                candleIndex: realtimeKlines.count - 1,
+                type: .shortOpen, price: last.close,
+                stopLoss: sl, stopTarget: last.close - range,
+                strength: min(abs(cs.score), 100),
+                source: "实时评分",
+                timestamp: last.timestamp
+            ))
+        }
+        signalMarkers = filtered
     }
     
     // MARK: - 实时K线延伸
@@ -245,7 +274,38 @@ class ChartViewModel: ObservableObject {
             debugText = "[雅虎] \(fetched.count)根K线 OK"
             if !fetched.isEmpty {
                 compositeSignal = SignalEngine.composite(fetched)
-                signalMarkers = SignalEngine.perCandleSignals(fetched)
+                var markers = SignalEngine.perCandleSignals(fetched)
+                // 最新一根K线的实时信号
+                if let cs = compositeSignal, let last = fetched.last {
+                    if cs.score >= 40 {
+                        let sl = last.low
+                        let range = last.close - sl
+                        markers.append(SignalMarker(
+                            candleIndex: fetched.count - 1,
+                            type: .longOpen,
+                            price: last.close,
+                            stopLoss: sl,
+                            stopTarget: last.close + range,
+                            strength: min(cs.score, 100),
+                            source: "实时评分",
+                            timestamp: last.timestamp
+                        ))
+                    } else if cs.score <= -40 {
+                        let sl = last.high
+                        let range = sl - last.close
+                        markers.append(SignalMarker(
+                            candleIndex: fetched.count - 1,
+                            type: .shortOpen,
+                            price: last.close,
+                            stopLoss: sl,
+                            stopTarget: last.close - range,
+                            strength: min(abs(cs.score), 100),
+                            source: "实时评分",
+                            timestamp: last.timestamp
+                        ))
+                    }
+                }
+                signalMarkers = markers
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -256,7 +316,15 @@ class ChartViewModel: ObservableObject {
             historicalCount = mock.count
             if !mock.isEmpty {
                 compositeSignal = SignalEngine.composite(mock)
-                signalMarkers = SignalEngine.perCandleSignals(mock)
+                var markers = SignalEngine.perCandleSignals(mock)
+                if let cs = compositeSignal, let last = mock.last {
+                    if cs.score >= 40 {
+                        markers.append(SignalMarker(candleIndex: mock.count-1, type: .longOpen, price: last.close, stopLoss: last.low, stopTarget: last.close + (last.close - last.low), strength: min(cs.score, 100), source: "实时评分", timestamp: last.timestamp))
+                    } else if cs.score <= -40 {
+                        markers.append(SignalMarker(candleIndex: mock.count-1, type: .shortOpen, price: last.close, stopLoss: last.high, stopTarget: last.close - (last.high - last.close), strength: min(abs(cs.score), 100), source: "实时评分", timestamp: last.timestamp))
+                    }
+                }
+                signalMarkers = markers
             }
         }
         
