@@ -9,17 +9,19 @@ struct CandleChartContainer: UIViewRepresentable {
     
     func makeUIView(context: Context) -> CandleStickChartView {
         let chart = CandleStickChartView()
-        configureChart(chart)
+        configureChart(chart, context: context)
         chart.data = createChartData()
+        chart.marker = SignalMarkerView(viewModel: viewModel)
         return chart
     }
     
     func updateUIView(_ uiView: CandleStickChartView, context: Context) {
         uiView.data = createChartData()
+        uiView.marker = SignalMarkerView(viewModel: viewModel)
         uiView.notifyDataSetChanged()
     }
     
-    private func configureChart(_ chart: CandleStickChartView) {
+    private func configureChart(_ chart: CandleStickChartView, context: Context) {
         chart.backgroundColor = UIColor(AppColors.background)
         chart.gridBackgroundColor = UIColor(AppColors.cardBackground)
         
@@ -45,6 +47,20 @@ struct CandleChartContainer: UIViewRepresentable {
         leftAxis.labelTextColor = UIColor(AppColors.textTertiary)
         leftAxis.gridColor = UIColor(AppColors.cardBorder)
         leftAxis.labelPosition = .outsideChart
+        
+        // 止损线
+        if viewModel.showStopLoss {
+            leftAxis.removeAllLimitLines()
+            for level in viewModel.stopLossLevels {
+                let ll = ChartLimitLine(limit: level.price, label: level.label)
+                ll.labelPosition = .rightTop
+                ll.lineWidth = 1
+                ll.lineDashLengths = [4, 4]
+                ll.valueTextColor = UIColor(level.color == "#EF4444" ? AppColors.red : AppColors.green)
+                ll.labelFont = UIFont.systemFont(ofSize: 9)
+                leftAxis.addLimitLine(ll)
+            }
+        }
         
         // 右Y轴
         let rightAxis = chart.rightAxis
@@ -86,7 +102,73 @@ struct CandleChartContainer: UIViewRepresentable {
         dataSet.neutralColor = UIColor(AppColors.textSecondary)
         dataSet.valueTextColor = UIColor.clear
         dataSet.drawValuesEnabled = false
-        return CandleChartData(dataSets: [dataSet] + extraDataSets)
+        
+        let data = CandleChartData(dataSets: [dataSet] + extraDataSets + signalDataSets)
+        return data
+    }
+    
+    // MARK: - 信号标记数据集
+    private var signalDataSets: [ChartDataSetProtocol] {
+        guard viewModel.showSignals else { return [] }
+        guard !klines.isEmpty else { return [] }
+        
+        var sets: [ChartDataSetProtocol] = []
+        
+        // 多头开仓标记（绿色三角向上）
+        let longEntries: [ChartDataEntry] = viewModel.signalMarkers
+            .filter { $0.type == .longOpen }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price) }
+        
+        if !longEntries.isEmpty {
+            let longSet = ScatterChartDataSet(entries: longEntries, label: "多")
+            longSet.scatterShape = .triangle
+            longSet.setColor(UIColor(AppColors.red))
+            longSet.scatterShapeSize = 12
+            longSet.drawValuesEnabled = true
+            longSet.valueFont = UIFont.boldSystemFont(ofSize: 8)
+            longSet.valueTextColor = UIColor(AppColors.red)
+            longSet.valueFormatter = SignalValueFormatter(marker: "多")
+            longSet.axisDependency = .left
+            sets.append(longSet)
+        }
+        
+        // 空头开仓标记（绿色三角向下）
+        let shortEntries: [ChartDataEntry] = viewModel.signalMarkers
+            .filter { $0.type == .shortOpen }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price) }
+        
+        if !shortEntries.isEmpty {
+            let shortSet = ScatterChartDataSet(entries: shortEntries, label: "空")
+            shortSet.scatterShape = .chevronDown
+            shortSet.setColor(UIColor(AppColors.green))
+            shortSet.scatterShapeSize = 12
+            shortSet.drawValuesEnabled = true
+            shortSet.valueFont = UIFont.boldSystemFont(ofSize: 8)
+            shortSet.valueTextColor = UIColor(AppColors.green)
+            shortSet.valueFormatter = SignalValueFormatter(marker: "空")
+            shortSet.axisDependency = .left
+            sets.append(shortSet)
+        }
+        
+        // 平仓标记（圆点）
+        let closeEntries: [ChartDataEntry] = viewModel.signalMarkers
+            .filter { !$0.type.isEntry }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price) }
+        
+        if !closeEntries.isEmpty {
+            let closeSet = ScatterChartDataSet(entries: closeEntries, label: "平")
+            closeSet.scatterShape = .circle
+            closeSet.setColor(UIColor(AppColors.gold))
+            closeSet.scatterShapeSize = 8
+            closeSet.drawValuesEnabled = true
+            closeSet.valueFont = UIFont.systemFont(ofSize: 8)
+            closeSet.valueTextColor = UIColor(AppColors.gold)
+            closeSet.valueFormatter = SignalValueFormatter(marker: "平")
+            closeSet.axisDependency = .left
+            sets.append(closeSet)
+        }
+        
+        return sets
     }
     
     private var extraDataSets: [ChartDataSetProtocol] {
@@ -127,6 +209,45 @@ struct CandleChartContainer: UIViewRepresentable {
         return dataSet
     }
 }
+
+// MARK: - 信号ValueFormatter（在标记点显示文字）
+class SignalValueFormatter: ValueFormatter {
+    private let marker: String
+    
+    init(marker: String) {
+        self.marker = marker
+    }
+    
+    func stringForValue(_ value: Double, entry: ChartDataEntry, dataSetIndex: Int, viewPortHandler: ViewPortHandler?) -> String {
+        marker
+    }
+}
+
+// MARK: - 信号弹出View（点击标记时显示详情）
+@available(iOS 14.0, *)
+class SignalMarkerView: MarkerView {
+    private let viewModel: ChartViewModel
+    
+    init(viewModel: ChartViewModel) {
+        self.viewModel = viewModel
+        super.init(frame: CGRect(x: 0, y: 0, width: 160, height: 60))
+        self.backgroundColor = .clear
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    override func refreshContent(entry: ChartDataEntry, highlight: Highlight) {
+        let idx = Int(entry.x)
+        let signals = viewModel.signalMarkers.filter { $0.candleIndex == idx }
+        // 由SwiftUI overlay处理显示
+        super.refreshContent(entry: entry, highlight: highlight)
+    }
+}
+
+// MARK: - 副图视图不变...
+// (保持原有的MACDChartView, KDJChartView, LineIndicatorChartView不变)
 
 // MARK: - MACD副图
 @available(iOS 14.0, *)
@@ -172,7 +293,6 @@ struct MACDChartView: UIViewRepresentable {
     private func createCombinedData() -> CombinedChartData {
         let data = CombinedChartData()
         
-        // DIF线
         let difEntries: [ChartDataEntry] = macd.dif.enumerated().compactMap { (i, v) in
             guard let v = v else { return nil }
             return ChartDataEntry(x: Double(i), y: v)
@@ -183,7 +303,6 @@ struct MACDChartView: UIViewRepresentable {
         difSet.drawCirclesEnabled = false
         difSet.drawValuesEnabled = false
         
-        // DEA线
         let deaEntries: [ChartDataEntry] = macd.dea.enumerated().compactMap { (i, v) in
             guard let v = v else { return nil }
             return ChartDataEntry(x: Double(i), y: v)
@@ -194,7 +313,6 @@ struct MACDChartView: UIViewRepresentable {
         deaSet.drawCirclesEnabled = false
         deaSet.drawValuesEnabled = false
         
-        // 柱状图
         let barEntries: [BarChartDataEntry] = macd.histogram.enumerated().compactMap { (i, v) in
             guard let v = v else { return nil }
             return BarChartDataEntry(x: Double(i), y: v)
@@ -278,7 +396,6 @@ struct KDJChartView: UIViewRepresentable {
         return LineChartData(dataSets: dataSets)
     }
     
-    // J值 = 3K - 2D
     private var kj: [Double?] {
         zip(kdj.k, kdj.d).map { (k, d) -> Double? in
             guard let k = k, let d = d else { return nil }
@@ -287,7 +404,7 @@ struct KDJChartView: UIViewRepresentable {
     }
 }
 
-// MARK: - 单线指标副图（RSI, W%R, OBV, ATR）
+// MARK: - 单线指标副图
 @available(iOS 14.0, *)
 struct LineIndicatorChartView: UIViewRepresentable {
     let values: [Double?]

@@ -315,4 +315,223 @@ class SignalEngine {
         
         return TradeSignal(type: .neutral, strength: 50, description: "威廉正常", detail: nil)
     }
+    
+    // MARK: - 逐K线信号检测（用于图表标记）
+    static func detectPerCandleSignals(_ data: [Kline]) -> [SignalMarker] {
+        guard data.count >= 50 else { return [] }
+        var markers: [SignalMarker] = []
+        
+        // 1. MACD金叉/死叉 + 顶底背离
+        let macdResult = IndicatorEngine.macd(data)
+        let histogram = macdResult.histogram.compactMap { $0 }
+        let dif = macdResult.dif.compactMap { $0 }
+        let dea = macdResult.dea.compactMap { $0 }
+        
+        // DIF偏移量（计算macd.startIdx）
+        let difOffset = data.count - dif.count
+        let histOffset = data.count - histogram.count
+        
+        // MACD金叉（DIF上穿DEA）
+        for i in 1..<dif.count {
+            let idx = difOffset + i
+            guard i < dea.count else { break }
+            let prevD = dif[safe: i-1] ?? 0
+            let currD = dif[i]
+            let prevE = dea[safe: i-1] ?? 0
+            let currE = dea[i]
+            
+            // 金叉且在零轴附近或以下
+            if prevD <= prevE && currD > currE && currD < 20 {
+                let price = data[idx].low
+                let sl = price - (data[idx].high - data[idx].low) * 1.5
+                markers.append(SignalMarker(
+                    candleIndex: idx, type: .longOpen,
+                    price: price, stopLoss: max(sl, price * 0.97),
+                    stopTarget: price + (price - max(sl, price * 0.97)),
+                    strength: 75, source: "MACD金叉",
+                    timestamp: data[idx].timestamp
+                ))
+            }
+            // 死叉
+            if prevD >= prevE && currD < currE && currD > -20 {
+                let price = data[idx].high
+                let sl = price + (data[idx].high - data[idx].low) * 1.5
+                markers.append(SignalMarker(
+                    candleIndex: idx, type: .shortOpen,
+                    price: price, stopLoss: min(sl, price * 1.03),
+                    stopTarget: price - (min(sl, price * 1.03) - price),
+                    strength: 75, source: "MACD死叉",
+                    timestamp: data[idx].timestamp
+                ))
+            }
+        }
+        
+        // 2. KDJ金叉/死叉
+        let kdjResult = IndicatorEngine.kdj(data)
+        let k = kdjResult.k.compactMap { $0 }
+        let d = kdjResult.d.compactMap { $0 }
+        let kdjOffset = data.count - k.count
+        
+        for i in 1..<k.count {
+            let idx = kdjOffset + i
+            guard i < d.count else { break }
+            let pk = k[safe: i-1] ?? 50
+            let ck = k[i]
+            let pd = d[safe: i-1] ?? 50
+            let cd = d[i]
+            
+            // 低位金叉
+            if pk <= pd && ck > cd && ck < 30 {
+                markers.append(SignalMarker(
+                    candleIndex: idx, type: .longOpen,
+                    price: data[idx].close,
+                    stopLoss: data[idx].low * 0.985,
+                    stopTarget: data[idx].close + (data[idx].close - data[idx].low * 0.985),
+                    strength: 70, source: "KDJ金叉",
+                    timestamp: data[idx].timestamp
+                ))
+            }
+            // 高位死叉
+            if pk >= pd && ck < cd && ck > 70 {
+                markers.append(SignalMarker(
+                    candleIndex: idx, type: .shortOpen,
+                    price: data[idx].close,
+                    stopLoss: data[idx].high * 1.015,
+                    stopTarget: data[idx].close - (data[idx].high * 1.015 - data[idx].close),
+                    strength: 70, source: "KDJ死叉",
+                    timestamp: data[idx].timestamp
+                ))
+            }
+        }
+        
+        // 3. RSI超卖/超买
+        let rsiValues = IndicatorEngine.rsi(data)
+        let rsiOffset = data.count - rsiValues.count
+        for i in 0..<rsiValues.count {
+            guard let r = rsiValues[i] else { continue }
+            let idx = rsiOffset + i
+            guard idx > 0 else { continue }
+            let prevR = rsiValues[safe: i-1] ?? 50
+            
+            // RSI从超卖区上穿30
+            if prevR < 30 && r >= 30 && r < 50 {
+                markers.append(SignalMarker(
+                    candleIndex: idx, type: .longOpen,
+                    price: data[idx].close,
+                    stopLoss: data[idx].low * 0.98,
+                    stopTarget: data[idx].close + (data[idx].close - data[idx].low * 0.98),
+                    strength: 65, source: "RSI超卖反弹",
+                    timestamp: data[idx].timestamp
+                ))
+            }
+            // RSI从超买区下穿70
+            if prevR > 70 && r <= 70 && r > 50 {
+                markers.append(SignalMarker(
+                    candleIndex: idx, type: .shortOpen,
+                    price: data[idx].close,
+                    stopLoss: data[idx].high * 1.02,
+                    stopTarget: data[idx].close - (data[idx].high * 1.02 - data[idx].close),
+                    strength: 65, source: "RSI超买回调",
+                    timestamp: data[idx].timestamp
+                ))
+            }
+        }
+        
+        // 4. 布林带上下轨
+        let boll = IndicatorEngine.bollinger(data)
+        for i in 0..<data.count {
+            guard let upper = boll.upper[safe: i] ?? nil,
+                  let lower = boll.lower[safe: i] ?? nil else { continue }
+            let close = data[i].close
+            
+            // 价格触及下轨
+            if close <= lower && i > 5 {
+                let prevClose = data[i-1].close
+                if prevClose > lower || true {
+                    markers.append(SignalMarker(
+                        candleIndex: i, type: .longOpen,
+                        price: close,
+                        stopLoss: lower - (upper - lower) * 0.1,
+                        stopTarget: data[i].high + (data[i].high - close),
+                        strength: 60, source: "布林下轨",
+                        timestamp: data[i].timestamp
+                    ))
+                }
+            }
+            // 价格触及上轨
+            if close >= upper && i > 5 {
+                let prevClose = data[i-1].close
+                if prevClose < upper || true {
+                    markers.append(SignalMarker(
+                        candleIndex: i, type: .shortOpen,
+                        price: close,
+                        stopLoss: upper + (upper - lower) * 0.1,
+                        stopTarget: data[i].low - (close - data[i].low),
+                        strength: 60, source: "布林上轨",
+                        timestamp: data[i].timestamp
+                    ))
+                }
+            }
+        }
+        
+        // 5. 处理联动信号：多→空触发器平多开空
+        var linkedMarkers: [SignalMarker] = []
+        let sorted = markers.sorted { $0.candleIndex < $1.candleIndex }
+        var lastLongIdx = -1
+        var lastShortIdx = -1
+        
+        for m in sorted {
+            if m.type == .longOpen {
+                lastLongIdx = m.candleIndex
+            } else if m.type == .shortOpen && lastLongIdx >= 0 {
+                let gap = m.candleIndex - lastLongIdx
+                if gap > 0 && gap < 30 {
+                    // 在多头开仓之后出现空头信号 → 平多开空
+                    linkedMarkers.append(SignalMarker(
+                        candleIndex: m.candleIndex - 1,
+                        type: .longClose,
+                        price: data[m.candleIndex - 1].close,
+                        stopLoss: nil,
+                        stopTarget: nil,
+                        strength: 80,
+                        source: "平多",
+                        timestamp: data[m.candleIndex - 1].timestamp
+                    ))
+                }
+                lastLongIdx = -1
+            }
+            if m.type == .shortOpen {
+                lastShortIdx = m.candleIndex
+            } else if m.type == .longOpen && lastShortIdx >= 0 {
+                let gap = m.candleIndex - lastShortIdx
+                if gap > 0 && gap < 30 {
+                    linkedMarkers.append(SignalMarker(
+                        candleIndex: m.candleIndex - 1,
+                        type: .shortClose,
+                        price: data[m.candleIndex - 1].close,
+                        stopLoss: nil,
+                        stopTarget: nil,
+                        strength: 80,
+                        source: "平空",
+                        timestamp: data[m.candleIndex - 1].timestamp
+                    ))
+                }
+                lastShortIdx = -1
+            }
+        }
+        
+        markers.append(contentsOf: linkedMarkers)
+        
+        // 6. 去重：同K线同类型只保留最强
+        var deduped: [SignalMarker] = []
+        var seen = Set<String>()
+        for m in markers.sorted(by: { $0.strength > $1.strength }) {
+            let key = "\(m.candleIndex)-\(m.type.rawValue)"
+            if seen.insert(key).inserted {
+                deduped.append(m)
+            }
+        }
+        
+        return deduped.sorted { $0.candleIndex < $1.candleIndex }
+    }
 }

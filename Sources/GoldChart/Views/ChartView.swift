@@ -4,10 +4,18 @@ import SwiftUI
 struct ChartView: View {
     @ObservedObject var viewModel: ChartViewModel
     
+    @State private var showSignalDetail = false
+    
     var body: some View {
         VStack(spacing: 0) {
+            // 实时行情栏
+            realTimeBar
+            
             // 价格信息栏
             priceInfoBar
+            
+            // 持仓状态
+            positionBar
             
             ScrollView {
                 VStack(spacing: 8) {
@@ -25,6 +33,9 @@ struct ChartView: View {
                             )
                             .frame(height: 320)
                             .padding(.horizontal, 4)
+                            .onTapGesture { location in
+                                showSignalDetail = true
+                            }
                             
                             // 一个亿抄底见顶信号浮标
                             if let assessment = viewModel.assessment {
@@ -42,6 +53,11 @@ struct ChartView: View {
                         }
                     }
                     
+                    // 信号标记列表
+                    if viewModel.showSignals && !viewModel.signalMarkers.isEmpty {
+                        signalList
+                    }
+                    
                     // 指标选择
                     indicatorSelector
                     
@@ -54,6 +70,64 @@ struct ChartView: View {
                 }
             }
         }
+        .sheet(isPresented: $showSignalDetail) {
+            SignalDetailSheet(viewModel: viewModel)
+        }
+    }
+    
+    // MARK: - 实时行情栏
+    private var realTimeBar: some View {
+        HStack(spacing: 8) {
+            // 连接状态指示
+            Circle()
+                .fill(viewModel.isRealTimeConnected ? Color.green : Color.gray)
+                .frame(width: 6, height: 6)
+            
+            Text(viewModel.isRealTimeConnected ? "实时" : "延迟")
+                .font(.system(size: 10))
+                .foregroundColor(AppColors.textTertiary)
+            
+            if let quote = viewModel.realTimeQuote {
+                Text(quote.time)
+                    .font(.system(size: 10))
+                    .foregroundColor(AppColors.textTertiary)
+                
+                Text(quote.formattedPrice)
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(quote.change >= 0 ? AppColors.red : AppColors.green)
+                
+                Text(quote.formattedPercent)
+                    .font(.system(size: 11))
+                    .foregroundColor(quote.changePercent >= 0 ? AppColors.red : AppColors.green)
+            }
+            
+            Spacer()
+            
+            // 信号开关
+            Button(action: { viewModel.showSignals.toggle() }) {
+                Text("信号")
+                    .font(.system(size: 11))
+                    .foregroundColor(viewModel.showSignals ? AppColors.gold : AppColors.textTertiary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(viewModel.showSignals ? AppColors.gold.opacity(0.15) : Color.clear)
+            .cornerRadius(4)
+            
+            // 止损线开关
+            Button(action: { viewModel.showStopLoss.toggle() }) {
+                Text("止损")
+                    .font(.system(size: 11))
+                    .foregroundColor(viewModel.showStopLoss ? AppColors.gold : AppColors.textTertiary)
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(viewModel.showStopLoss ? AppColors.gold.opacity(0.15) : Color.clear)
+            .cornerRadius(4)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+        .background(AppColors.cardBackground)
     }
     
     // MARK: - 价格信息栏
@@ -96,6 +170,57 @@ struct ChartView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
+    }
+    
+    // MARK: - 持仓状态栏
+    private var positionBar: some View {
+        HStack(spacing: 12) {
+            // 持仓方向
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(positionColor)
+                    .frame(width: 8, height: 8)
+                Text(viewModel.position.rawValue)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(positionColor)
+            }
+            
+            if viewModel.entryPrice > 0 {
+                // 开仓价
+                Text("开 \(viewModel.entryPrice.formattedPrice(viewModel.selectedProduct))")
+                    .font(.system(size: 12))
+                    .foregroundColor(AppColors.textSecondary)
+                
+                // 盈亏
+                Text(viewModel.pnl.formattedPrice(viewModel.selectedProduct))
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(viewModel.pnl >= 0 ? AppColors.red : AppColors.green)
+                
+                Text("(\(viewModel.pnlPercent.percentString()))")
+                    .font(.system(size: 11))
+                    .foregroundColor(viewModel.pnlPercent >= 0 ? AppColors.red : AppColors.green)
+            }
+            
+            Spacer()
+            
+            // 信号概览
+            if let assessment = viewModel.assessment {
+                Text("信号: \(assessment.score)")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppColors.textTertiary)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+        .background(AppColors.cardBackground.opacity(0.5))
+    }
+    
+    private var positionColor: Color {
+        switch viewModel.position {
+        case .long: return AppColors.red
+        case .short: return AppColors.green
+        case .none: return AppColors.textTertiary
+        }
     }
     
     // MARK: - 加载中
@@ -143,12 +268,49 @@ struct ChartView: View {
         }
     }
     
+    // MARK: - 信号列表
+    private var signalList: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 6) {
+                ForEach(viewModel.signalMarkers.suffix(10)) { signal in
+                    HStack(spacing: 2) {
+                        Text(signal.type.marker)
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(signalColor(signal.type))
+                        Text(signal.price.formattedPrice(viewModel.selectedProduct))
+                            .font(.system(size: 9))
+                            .foregroundColor(AppColors.textSecondary)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(AppColors.cardBackground)
+                    .cornerRadius(4)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .stroke(signalColor(signal.type).opacity(0.3), lineWidth: 1)
+                    )
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+        }
+    }
+    
+    private func signalColor(_ type: SignalMarker.SignalType) -> Color {
+        switch type {
+        case .longOpen: return AppColors.red
+        case .shortOpen: return AppColors.green
+        case .longClose: return AppColors.gold
+        case .shortClose: return AppColors.gold
+        }
+    }
+    
     // MARK: - 指标选择
     private var indicatorSelector: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 Button(action: {
-                    viewModel.selectedIndicator = viewModel.selectedIndicator == nil ? nil : nil
+                    viewModel.selectedIndicator = nil
                     viewModel.showVolume.toggle()
                 }) {
                     Text("成交量")
@@ -203,7 +365,6 @@ struct ChartView: View {
     // MARK: - 价格详情卡片
     private var priceDetailCard: some View {
         VStack(spacing: 6) {
-            // MA 信息
             let ma5 = viewModel.computeMA(period: 5)
             let ma10 = viewModel.computeMA(period: 10)
             let ma20 = viewModel.computeMA(period: 20)
@@ -214,7 +375,6 @@ struct ChartView: View {
                 indicatorLabel("MA20", value: (ma20.last ?? nil).map { String(format: "%.2f", $0) } ?? "--", color: AppColors.textSecondary)
             }
             
-            // MACD 信息
             let macd = viewModel.computeMACD()
             if let dif = macd.dif.last ?? nil,
                let dea = macd.dea.last ?? nil,
@@ -226,11 +386,11 @@ struct ChartView: View {
                 }
             }
             
-            // RSI 信息
             let rsi = viewModel.computeRSI()
             if let rsiVal = rsi.last ?? nil {
                 HStack(spacing: 20) {
-                    indicatorLabel("RSI(14)", value: String(format: "%.1f", rsiVal), color: rsiVal >= 70 ? AppColors.red : rsiVal <= 30 ? AppColors.green : AppColors.indicatorRSI)
+                    indicatorLabel("RSI(14)", value: String(format: "%.1f", rsiVal),
+                                  color: rsiVal >= 70 ? AppColors.red : rsiVal <= 30 ? AppColors.green : AppColors.indicatorRSI)
                 }
             }
         }
@@ -249,6 +409,60 @@ struct ChartView: View {
             Text(value)
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(color)
+        }
+    }
+}
+
+// MARK: - 信号详情页
+@available(iOS 14.0, *)
+struct SignalDetailSheet: View {
+    @ObservedObject var viewModel: ChartViewModel
+    @Environment(\.dismiss) var dismiss
+    
+    var body: some View {
+        NavigationView {
+            List {
+                ForEach(viewModel.signalMarkers.reversed()) { signal in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(signal.type.rawValue)
+                                .font(.headline)
+                                .foregroundColor(signalColor(signal.type))
+                            Spacer()
+                            Text(signal.source)
+                                .font(.caption)
+                                .foregroundColor(AppColors.textTertiary)
+                        }
+                        HStack {
+                            Text("价格: \(signal.price.formattedPrice(viewModel.selectedProduct))")
+                            if let sl = signal.stopLoss {
+                                Text("止损: \(sl.formattedPrice(viewModel.selectedProduct))")
+                            }
+                            if let st = signal.stopTarget {
+                                Text("止盈: \(st.formattedPrice(viewModel.selectedProduct))")
+                            }
+                        }
+                        .font(.caption)
+                        .foregroundColor(AppColors.textSecondary)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .navigationTitle("信号明细")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("关闭") { dismiss() }
+                }
+            }
+        }
+    }
+    
+    private func signalColor(_ type: SignalMarker.SignalType) -> Color {
+        switch type {
+        case .longOpen: return AppColors.red
+        case .shortOpen: return AppColors.green
+        case .longClose, .shortClose: return AppColors.gold
         }
     }
 }
