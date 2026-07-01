@@ -12,8 +12,8 @@ class RealTimeService: ObservableObject {
     private var timer: Timer?
     private var fxTimer: Timer?
     private let sinaCodes: [ProductType: String] = [
-        .xau: "hf_GC",      // 纽约金
-        .xag: "hf_SI",       // 纽约银
+        .xau: "hf_XAU",     // 伦敦金（现货，与口袋贵金属一致）
+        .xag: "hf_XAG",     // 伦敦银（现货）
     ]
     
     private init() {}
