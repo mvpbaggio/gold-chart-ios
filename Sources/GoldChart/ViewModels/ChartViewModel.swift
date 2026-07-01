@@ -345,16 +345,17 @@ class ChartViewModel: ObservableObject {
             guard let sl = signal.stopLoss else { continue }
             let slPrice = sl * rate
             if signal.type == .longOpen {
-                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#EF4444"))
+                // 止损=绿色，止盈=红色
+                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#22C55E"))
                 if let st = signal.stopTarget {
                     let stPrice = st * rate
-                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#22C55E"))
+                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#EF4444"))
                 }
             } else if signal.type == .shortOpen {
-                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#EF4444"))
+                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#22C55E"))
                 if let st = signal.stopTarget {
                     let stPrice = st * rate
-                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#22C55E"))
+                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#EF4444"))
                 }
             }
         }

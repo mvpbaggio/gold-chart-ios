@@ -56,7 +56,8 @@ struct CandleChartContainer: UIViewRepresentable {
                 ll.labelPosition = .rightTop
                 ll.lineWidth = 1
                 ll.lineDashLengths = [4, 4]
-                ll.valueTextColor = UIColor(level.color == "#EF4444" ? AppColors.red : AppColors.green)
+                ll.valueTextColor = UIColor(level.color == "#EF4444" ? AppColors.red : UIColor(AppColors.green))
+                ll.lineColor = UIColor(level.color == "#EF4444" ? AppColors.red.opacity(0.5) : AppColors.green.opacity(0.5))
                 leftAxis.addLimitLine(ll)
             }
         }
