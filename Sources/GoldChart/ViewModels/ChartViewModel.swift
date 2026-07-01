@@ -19,6 +19,12 @@ class ChartViewModel: ObservableObject {
     @Published var realTimeQuote: RealTimeQuote?
     @Published var isRealTimeConnected = false
     
+    // 人民币计价
+    @Published var useCNY = false
+    
+    // 实时K线（最后一根K线随实时行情延伸）
+    @Published var realtimeKlines: [Kline] = []
+    
     // 选中的指标
     @Published var showMA = false
     @Published var showEMA = false
@@ -27,8 +33,8 @@ class ChartViewModel: ObservableObject {
     @Published var showKDJ = false
     @Published var showBOLL = false
     @Published var showVolume = true
-    @Published var showSignals = true     // 是否显示信号标记
-    @Published var showStopLoss = true    // 是否显示止损线
+    @Published var showSignals = true
+    @Published var showStopLoss = true
     
     @Published var selectedIndicator: IndicatorType? = nil
     
@@ -53,7 +59,12 @@ class ChartViewModel: ObservableObject {
         // 订阅实时行情
         RealTimeService.shared.$quote
             .receive(on: DispatchQueue.main)
-            .assign(to: &$realTimeQuote)
+            .sink { [weak self] quote in
+                guard let self = self, let quote = quote else { return }
+                self.realTimeQuote = quote
+                self.updateRealtimeCandle(quote: quote)
+            }
+            .store(in: &cancellables)
         
         RealTimeService.shared.$isConnected
             .receive(on: DispatchQueue.main)
@@ -62,29 +73,165 @@ class ChartViewModel: ObservableObject {
         Task { await refresh() }
     }
     
+    // MARK: - 人民币计价
+    
+    /// 当前汇率
+    var currentRate: Double {
+        RealTimeService.shared.exchangeRate
+    }
+    
+    /// 人民币价格
+    var cnyPrice: Double {
+        currentPrice * currentRate
+    }
+    
+    /// 人民币涨跌额
+    var cnyChange: Double {
+        priceChange * currentRate
+    }
+    
+    /// 人民币涨跌幅
+    var cnyChangePercent: Double {
+        changePercent * currentRate
+    }
+    
+    /// 人民币最高
+    var cnyHigh: Double {
+        todayHigh * currentRate
+    }
+    
+    /// 人民币最低
+    var cnyLow: Double {
+        todayLow * currentRate
+    }
+    
+    /// 获取实时价格（按币种）
+    var displayPrice: Double {
+        useCNY ? cnyPrice : currentPrice
+    }
+    
+    var displayChange: Double {
+        useCNY ? cnyChange : priceChange
+    }
+    
+    var displayChangePercent: Double {
+        useCNY ? cnyChangePercent : changePercent
+    }
+    
+    var displayHigh: Double {
+        useCNY ? cnyHigh : todayHigh
+    }
+    
+    var displayLow: Double {
+        useCNY ? cnyLow : todayLow
+    }
+    
+    var displayLabel: String {
+        useCNY ? "\(selectedProduct.displayName)/CNY" : selectedProduct.displayName
+    }
+    
+    /// 获取换算后的K线数据供图表使用
+    var displayKlines: [Kline] {
+        if useCNY {
+            return realtimeKlines.map { kline in
+                let rate = currentRate
+                return Kline(
+                    timestamp: kline.timestamp,
+                    open: kline.open * rate,
+                    high: kline.high * rate,
+                    low: kline.low * rate,
+                    close: kline.close * rate,
+                    volume: kline.volume
+                )
+            }
+        }
+        return realtimeKlines
+    }
+    
+    // MARK: - 实时K线延伸
+    
+    private func updateRealtimeCandle(quote: RealTimeQuote) {
+        guard !realtimeKlines.isEmpty else { return }
+        var updated = realtimeKlines
+        var last = updated.removeLast()
+        
+        // 如果实时行情时间超过K线周期，则新建一根（正常情况）
+        // 否则更新最后一根的最高/最低/收盘
+        let lastKlineTime = last.timestamp
+        let timePerCandle = periodInSeconds
+        let now = Date().timeIntervalSince1970 * 1000
+        
+        if now - lastKlineTime >= timePerCandle {
+            // 新K线：使用当前实时数据
+            let newCandle = Kline(
+                timestamp: lastKlineTime + timePerCandle,
+                open: quote.price,
+                high: quote.price,
+                low: quote.price,
+                close: quote.price,
+                volume: 0
+            )
+            updated.append(last)
+            updated.append(newCandle)
+        } else {
+            // 更新最后一根
+            let newHigh = max(last.open, last.close, quote.price, last.high)
+            let newLow = min(last.open, last.close, quote.price, last.low)
+            let newClose = quote.price
+            let updatedLast = Kline(
+                timestamp: last.timestamp,
+                open: last.open,
+                high: newHigh,
+                low: newLow,
+                close: newClose,
+                volume: last.volume
+            )
+            updated.append(updatedLast)
+        }
+        
+        realtimeKlines = updated
+    }
+    
+    private var periodInSeconds: Double {
+        switch selectedPeriod {
+        case .m1: return 60_000
+        case .m5: return 300_000
+        case .m15: return 900_000
+        case .m30: return 1_800_000
+        case .h1: return 3_600_000
+        case .h4: return 14_400_000
+        case .d1: return 86_400_000
+        case .w1: return 604_800_000
+        }
+    }
+    
+    // MARK: - 刷新
+    
     @MainActor
     func refresh() async {
         isLoading = true
         errorMessage = nil
         
         do {
-            klines = try await GoldApiService.shared.fetchKlines(
+            let fetched = try await GoldApiService.shared.fetchKlines(
                 product: selectedProduct,
                 period: selectedPeriod
             )
-            // 评估信号
-            if !klines.isEmpty {
-                assessment = SignalEngine.evaluateSignals(klines: klines)
-                signalMarkers = SignalEngine.detectPerCandleSignals(klines)
+            klines = fetched
+            realtimeKlines = fetched
+            if !fetched.isEmpty {
+                assessment = SignalEngine.evaluateSignals(klines: fetched)
+                signalMarkers = SignalEngine.detectPerCandleSignals(fetched)
                 updatePosition()
             }
         } catch {
             errorMessage = error.localizedDescription
-            // 降级到模拟数据
-            klines = MockData.generateKlines(count: 200)
-            if !klines.isEmpty {
-                assessment = SignalEngine.evaluateSignals(klines: klines)
-                signalMarkers = SignalEngine.detectPerCandleSignals(klines)
+            let mock = MockData.generateKlines(count: 200)
+            klines = mock
+            realtimeKlines = mock
+            if !mock.isEmpty {
+                assessment = SignalEngine.evaluateSignals(klines: mock)
+                signalMarkers = SignalEngine.detectPerCandleSignals(mock)
             }
         }
         
@@ -107,13 +254,16 @@ class ChartViewModel: ObservableObject {
         Task { await refresh() }
     }
     
+    func toggleCNY() {
+        useCNY.toggle()
+    }
+    
     deinit {
         RealTimeService.shared.stopPolling()
     }
     
     // MARK: - 持仓追踪
     private func updatePosition() {
-        // 根据最后几个信号判断当前持仓方向
         let entries = signalMarkers.filter { $0.type.isEntry }.suffix(5)
         guard let last = entries.last else {
             position = .none
@@ -128,7 +278,6 @@ class ChartViewModel: ObservableObject {
             entryPrice = last.price
         }
         
-        // 检查有没有平仓信号覆盖
         let closes = signalMarkers.filter { !$0.type.isEntry }.suffix(2)
         if let lastClose = closes.last {
             if lastClose.candleIndex >= last.candleIndex {
@@ -141,7 +290,7 @@ class ChartViewModel: ObservableObject {
     }
     
     private func updatePnL() {
-        let currentPrice = realTimeQuote?.price ?? klines.last?.close ?? 0
+        let currentPrice = realTimeQuote?.price ?? realtimeKlines.last?.close ?? 0
         guard entryPrice > 0 else {
             pnl = 0
             pnlPercent = 0
@@ -161,7 +310,6 @@ class ChartViewModel: ObservableObject {
         }
     }
     
-    // MARK: - 活跃信号（最近的未平仓信号）
     var activeSignals: [SignalMarker] {
         guard !signalMarkers.isEmpty else { return [] }
         let entries = signalMarkers.filter { $0.type.isEntry }
@@ -169,85 +317,88 @@ class ChartViewModel: ObservableObject {
         return entries.filter { $0.candleIndex >= (lastEntry?.candleIndex ?? 0) - 5 }
     }
     
-    // MARK: - 止损线数据
     var stopLossLevels: [(price: Double, label: String, color: String)] {
         var levels: [(Double, String, String)] = []
+        let rate = useCNY ? currentRate : 1
         for signal in activeSignals {
             guard let sl = signal.stopLoss else { continue }
+            let slPrice = sl * rate
             if signal.type == .longOpen {
-                levels.append((sl, "止损 \(String(format: "%.1f", sl))", "#EF4444"))
+                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#EF4444"))
                 if let st = signal.stopTarget {
-                    levels.append((st, "止盈 \(String(format: "%.1f", st))", "#22C55E"))
+                    let stPrice = st * rate
+                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#22C55E"))
                 }
             } else if signal.type == .shortOpen {
-                levels.append((sl, "止损 \(String(format: "%.1f", sl))", "#EF4444"))
+                levels.append((slPrice, "止损 \(String(format: "%.1f", slPrice))", "#EF4444"))
                 if let st = signal.stopTarget {
-                    levels.append((st, "止盈 \(String(format: "%.1f", st))", "#22C55E"))
+                    let stPrice = st * rate
+                    levels.append((stPrice, "止盈 \(String(format: "%.1f", stPrice))", "#22C55E"))
                 }
             }
         }
         return levels
     }
     
-    // MARK: - 指标计算
+    // MARK: - 指标计算（使用原始K线数据）
     func computeMA(period: Int = 5) -> [Double?] {
-        IndicatorEngine.ma(klines, period: period)
+        IndicatorEngine.ma(realtimeKlines, period: period)
     }
     
     func computeEMA(period: Int = 12) -> [Double?] {
-        IndicatorEngine.ema(klines, period: period)
+        IndicatorEngine.ema(realtimeKlines, period: period)
     }
     
     func computeMACD() -> MACDResult {
-        IndicatorEngine.macd(klines)
+        IndicatorEngine.macd(realtimeKlines)
     }
     
     func computeRSI(period: Int = 14) -> [Double?] {
-        IndicatorEngine.rsi(klines, period: period)
+        IndicatorEngine.rsi(realtimeKlines, period: period)
     }
     
     func computeKDJ() -> KDJResult {
-        IndicatorEngine.kdj(klines)
+        IndicatorEngine.kdj(realtimeKlines)
     }
     
     func computeBOLL() -> BollingerResult {
-        IndicatorEngine.bollinger(klines)
+        IndicatorEngine.bollinger(realtimeKlines)
     }
     
     func computeWR() -> [Double?] {
-        IndicatorEngine.williamsR(klines)
+        IndicatorEngine.williamsR(realtimeKlines)
     }
     
     func computeOBV() -> [Double?] {
-        IndicatorEngine.obv(klines)
+        IndicatorEngine.obv(realtimeKlines)
     }
     
     func computeATR() -> [Double?] {
-        IndicatorEngine.atr(klines)
+        IndicatorEngine.atr(realtimeKlines)
     }
     
     func computeIchimoku() -> IchimokuResult {
-        IndicatorEngine.ichimoku(klines)
+        IndicatorEngine.ichimoku(realtimeKlines)
     }
     
-    // MARK: - 当前价格信息
+    // MARK: - 当前价格信息（原始USD价）
     var currentPrice: Double {
-        realTimeQuote?.price ?? klines.last?.close ?? 0
+        realTimeQuote?.price ?? realtimeKlines.last?.close ?? 0
     }
     
     var priceChange: Double {
-        realTimeQuote?.change ?? (klines.count >= 2 ? klines.last!.close - klines.dropLast().last!.close : 0)
+        realTimeQuote?.change ?? 0
     }
     
-    var priceChangePercent: Double {
+    var changePercent: Double {
         realTimeQuote?.changePercent ?? 0
     }
     
     var todayHigh: Double {
-        realTimeQuote?.high ?? klines.last?.high ?? 0
+        realTimeQuote?.high ?? realtimeKlines.last?.high ?? 0
     }
     
     var todayLow: Double {
-        realTimeQuote?.low ?? klines.last?.low ?? 0
+        realTimeQuote?.low ?? realtimeKlines.last?.low ?? 0
     }
 }

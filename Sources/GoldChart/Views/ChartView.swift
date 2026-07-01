@@ -8,7 +8,7 @@ struct ChartView: View {
     
     var body: some View {
         VStack(spacing: 0) {
-            // 实时行情栏
+            // 实时行情栏 + 币种切换
             realTimeBar
             
             // 价格信息栏
@@ -28,7 +28,7 @@ struct ChartView: View {
                     } else {
                         ZStack(alignment: .topTrailing) {
                             CandleChartContainer(
-                                klines: viewModel.klines,
+                                klines: viewModel.displayKlines,
                                 viewModel: viewModel
                             )
                             .frame(height: 320)
@@ -75,7 +75,7 @@ struct ChartView: View {
         }
     }
     
-    // MARK: - 实时行情栏
+    // MARK: - 实时行情栏 + 币种切换
     private var realTimeBar: some View {
         HStack(spacing: 8) {
             // 连接状态指示
@@ -91,17 +91,53 @@ struct ChartView: View {
                 Text(quote.time)
                     .font(.system(size: 10))
                     .foregroundColor(AppColors.textTertiary)
-                
-                Text(quote.formattedPrice)
+            }
+            
+            // 实时价格（USD）
+            HStack(spacing: 2) {
+                Text("$")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppColors.textTertiary)
+                Text(String(format: "%.2f", viewModel.currentPrice))
                     .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(quote.change >= 0 ? AppColors.red : AppColors.green)
-                
-                Text(quote.formattedPercent)
-                    .font(.system(size: 11))
-                    .foregroundColor(quote.changePercent >= 0 ? AppColors.red : AppColors.green)
+                    .foregroundColor(viewModel.priceChange >= 0 ? AppColors.red : AppColors.green)
+            }
+            
+            // 实时价格（CNY）
+            HStack(spacing: 2) {
+                Text("¥")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppColors.textTertiary)
+                Text(String(format: "%.2f", viewModel.cnyPrice))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(viewModel.priceChange >= 0 ? AppColors.red : AppColors.green)
             }
             
             Spacer()
+            
+            // 币种切换
+            HStack(spacing: 2) {
+                Button(action: { if viewModel.useCNY { viewModel.toggleCNY() } }) {
+                    Text("$")
+                        .font(.system(size: 11, weight: viewModel.useCNY ? .regular : .bold))
+                        .foregroundColor(viewModel.useCNY ? AppColors.textTertiary : AppColors.gold)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                }
+                Button(action: { if !viewModel.useCNY { viewModel.toggleCNY() } }) {
+                    Text("¥")
+                        .font(.system(size: 11, weight: viewModel.useCNY ? .bold : .regular))
+                        .foregroundColor(viewModel.useCNY ? AppColors.gold : AppColors.textTertiary)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                }
+            }
+            .background(AppColors.cardBackground)
+            .cornerRadius(4)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(AppColors.cardBorder, lineWidth: 1)
+            )
             
             // 信号开关
             Button(action: { viewModel.showSignals.toggle() }) {
@@ -113,17 +149,6 @@ struct ChartView: View {
             .padding(.vertical, 2)
             .background(viewModel.showSignals ? AppColors.gold.opacity(0.15) : Color.clear)
             .cornerRadius(4)
-            
-            // 止损线开关
-            Button(action: { viewModel.showStopLoss.toggle() }) {
-                Text("止损")
-                    .font(.system(size: 11))
-                    .foregroundColor(viewModel.showStopLoss ? AppColors.gold : AppColors.textTertiary)
-            }
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(viewModel.showStopLoss ? AppColors.gold.opacity(0.15) : Color.clear)
-            .cornerRadius(4)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
@@ -133,21 +158,21 @@ struct ChartView: View {
     // MARK: - 价格信息栏
     private var priceInfoBar: some View {
         HStack {
-            Text(viewModel.selectedProduct.displayName)
+            Text(viewModel.displayLabel)
                 .font(.system(size: 13))
                 .foregroundColor(AppColors.textSecondary)
             
-            Text(viewModel.currentPrice.formattedPrice(viewModel.selectedProduct))
+            Text(priceFormatted(viewModel.displayPrice))
                 .font(.system(size: 28, weight: .bold))
-                .foregroundColor(viewModel.priceChange >= 0 ? AppColors.red : AppColors.green)
+                .foregroundColor(viewModel.displayChange >= 0 ? AppColors.red : AppColors.green)
             
             VStack(alignment: .leading, spacing: 1) {
-                Text(viewModel.priceChange.formattedPrice(viewModel.selectedProduct))
+                Text(priceFormatted(viewModel.displayChange))
                     .font(.system(size: 13))
-                    .foregroundColor(viewModel.priceChange >= 0 ? AppColors.red : AppColors.green)
-                Text(viewModel.priceChangePercent.percentString())
+                    .foregroundColor(viewModel.displayChange >= 0 ? AppColors.red : AppColors.green)
+                Text("(\(viewModel.displayChangePercent.percentString()))")
                     .font(.system(size: 12))
-                    .foregroundColor(viewModel.priceChangePercent >= 0 ? AppColors.red : AppColors.green)
+                    .foregroundColor(viewModel.displayChangePercent >= 0 ? AppColors.red : AppColors.green)
             }
             
             Spacer()
@@ -156,13 +181,13 @@ struct ChartView: View {
                 HStack {
                     Text("高")
                         .foregroundColor(AppColors.textTertiary)
-                    Text(viewModel.todayHigh.formattedPrice(viewModel.selectedProduct))
+                    Text(priceFormatted(viewModel.displayHigh))
                         .foregroundColor(AppColors.textPrimary)
                 }
                 HStack {
                     Text("低")
                         .foregroundColor(AppColors.textTertiary)
-                    Text(viewModel.todayLow.formattedPrice(viewModel.selectedProduct))
+                    Text(priceFormatted(viewModel.displayLow))
                         .foregroundColor(AppColors.textPrimary)
                 }
             }
@@ -172,10 +197,16 @@ struct ChartView: View {
         .padding(.vertical, 8)
     }
     
+    private func priceFormatted(_ value: Double) -> String {
+        if viewModel.useCNY {
+            return String(format: "%.2f", value)
+        }
+        return value.formattedPrice(viewModel.selectedProduct)
+    }
+    
     // MARK: - 持仓状态栏
     private var positionBar: some View {
         HStack(spacing: 12) {
-            // 持仓方向
             HStack(spacing: 4) {
                 Circle()
                     .fill(positionColor)
@@ -186,12 +217,10 @@ struct ChartView: View {
             }
             
             if viewModel.entryPrice > 0 {
-                // 开仓价
                 Text("开 \(viewModel.entryPrice.formattedPrice(viewModel.selectedProduct))")
                     .font(.system(size: 12))
                     .foregroundColor(AppColors.textSecondary)
                 
-                // 盈亏
                 Text(viewModel.pnl.formattedPrice(viewModel.selectedProduct))
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(viewModel.pnl >= 0 ? AppColors.red : AppColors.green)
@@ -203,12 +232,16 @@ struct ChartView: View {
             
             Spacer()
             
-            // 信号概览
             if let assessment = viewModel.assessment {
                 Text("信号: \(assessment.score)")
                     .font(.system(size: 11))
                     .foregroundColor(AppColors.textTertiary)
             }
+            
+            // 汇率显示
+            Text("USD/CNY \(String(format: "%.4f", viewModel.currentRate))")
+                .font(.system(size: 10))
+                .foregroundColor(AppColors.textTertiary)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 4)
@@ -277,7 +310,7 @@ struct ChartView: View {
                         Text(signal.type.marker)
                             .font(.system(size: 10, weight: .bold))
                             .foregroundColor(signalColor(signal.type))
-                        Text(signal.price.formattedPrice(viewModel.selectedProduct))
+                        Text(priceFormatted(signal.price))
                             .font(.system(size: 9))
                             .foregroundColor(AppColors.textSecondary)
                     }
@@ -346,7 +379,7 @@ struct ChartView: View {
     private func indicatorSubChart(_ indicator: ChartViewModel.IndicatorType) -> some View {
         switch indicator {
         case .macd:
-            MACDChartView(macd: viewModel.computeMACD(), klineCount: viewModel.klines.count)
+            MACDChartView(macd: viewModel.computeMACD(), klineCount: viewModel.displayKlines.count)
         case .rsi:
             LineIndicatorChartView(values: viewModel.computeRSI(), name: "RSI", overbought: 70, oversold: 30, color: AppColors.indicatorRSI)
         case .kdj:
@@ -370,9 +403,9 @@ struct ChartView: View {
             let ma20 = viewModel.computeMA(period: 20)
             
             HStack(spacing: 20) {
-                indicatorLabel("MA5", value: (ma5.last ?? nil).map { String(format: "%.2f", $0) } ?? "--", color: AppColors.indicatorMA)
-                indicatorLabel("MA10", value: (ma10.last ?? nil).map { String(format: "%.2f", $0) } ?? "--", color: AppColors.indicatorEMA)
-                indicatorLabel("MA20", value: (ma20.last ?? nil).map { String(format: "%.2f", $0) } ?? "--", color: AppColors.textSecondary)
+                indicatorLabel("MA5", value: formatIndicatorValue(ma5.last ?? nil), color: AppColors.indicatorMA)
+                indicatorLabel("MA10", value: formatIndicatorValue(ma10.last ?? nil), color: AppColors.indicatorEMA)
+                indicatorLabel("MA20", value: formatIndicatorValue(ma20.last ?? nil), color: AppColors.textSecondary)
             }
             
             let macd = viewModel.computeMACD()
@@ -399,6 +432,14 @@ struct ChartView: View {
         .cornerRadius(8)
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppColors.cardBorder, lineWidth: 1))
         .padding(.horizontal, 12)
+    }
+    
+    private func formatIndicatorValue(_ value: Double?) -> String {
+        guard let v = value else { return "--" }
+        if viewModel.useCNY {
+            return String(format: "%.2f", v * viewModel.currentRate)
+        }
+        return String(format: "%.2f", v)
     }
     
     private func indicatorLabel(_ name: String, value: String, color: Color) -> some View {
