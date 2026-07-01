@@ -16,7 +16,7 @@ class GoldApiService {
     /// 获取K线数据
     func fetchKlines(product: ProductType, period: KlinePeriod, count: Int = 500) async throws -> [Kline] {
         let (range, interval) = mapPeriod(period)
-        let symbol = product == .xau ? "XAUUSD=X" : "XAGUSD=X"
+        let symbol = product == .xau ? "GC=F" : "SI=F"
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? symbol
         
         let urlStr = "https://query1.finance.yahoo.com/v8/finance/chart/\(encoded)?range=\(range)&interval=\(interval)"
