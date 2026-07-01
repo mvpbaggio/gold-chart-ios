@@ -193,7 +193,7 @@ class ChartViewModel: ObservableObject {
             ))
         } else {
             // 已有实时K线，更新最后一根（不碰历史数据）
-            var live = updated.removeLast()
+            let live = updated.removeLast()
             let newHigh = max(live.open, live.close, quote.price, live.high)
             let newLow = min(live.open, live.close, quote.price, live.low)
             updated.append(Kline(
