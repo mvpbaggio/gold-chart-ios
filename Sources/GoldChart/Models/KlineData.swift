@@ -287,7 +287,7 @@ struct CompositeSignal {
     /// 多空评级
     var level: SignalLevel {
         switch score {
-        case 70...: return .fierceLong
+        case 70...Int.max: return .fierceLong
         case 35...69: return .long
         case -34...34: return .neutral
         case -69...-35: return .short

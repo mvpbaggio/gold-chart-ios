@@ -87,8 +87,14 @@ struct ContentView: View {
     
     // MARK: - 信号Tab
     private var signalTab: some View {
-        SignalListView(assessment: chartVM.assessment)
-            .background(AppColors.background)
+        // 旧版信号已被11指标综合评分替代
+        VStack {
+            Text("多指标综合评分")
+                .font(.headline)
+                .foregroundColor(AppColors.textPrimary)
+            Spacer()
+        }
+        .background(AppColors.background)
     }
     
     // MARK: - A股搜索Tab

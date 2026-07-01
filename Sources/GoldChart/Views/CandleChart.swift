@@ -119,7 +119,7 @@ struct CandleChartContainer: UIViewRepresentable {
         dataSet.valueTextColor = UIColor.clear
         dataSet.drawValuesEnabled = false
         
-        let data = CandleChartData(dataSets: [dataSet] + extraDataSets + signalDataSets)
+        let data = CandleChartData(dataSets: [dataSet] + extraDataSets)
         return data
     }
     
