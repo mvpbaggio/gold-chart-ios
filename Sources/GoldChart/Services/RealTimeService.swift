@@ -107,11 +107,22 @@ class RealTimeService: ObservableObject {
         request.timeoutInterval = 3
         
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
-            guard let data = data, error == nil,
-                  let text = String(data: data, encoding: .utf8) else { return }
+            guard let data = data, error == nil else { return }
             
+            // Sina 部分中文字段用 GB 编码，导致个别字节不是合法 UTF-8
+            // 先试 UTF-8，不行用 GB 18030（新浪编码）
+            let text: String?
+            if let utf8 = String(data: data, encoding: .utf8) {
+                text = utf8
+            } else {
+                let gbk = CFStringConvertEncodingToNSStringEncoding(
+                    CFStringEncoding(CFStringEncodings.GB_18030_2000.rawValue))
+                text = NSString(data: data, encoding: gbk) as String?
+            }
+            
+            guard let t = text else { return }
             DispatchQueue.main.async {
-                self?.parseResponse(text, product: product)
+                self?.parseResponse(t, product: product)
             }
         }.resume()
     }
