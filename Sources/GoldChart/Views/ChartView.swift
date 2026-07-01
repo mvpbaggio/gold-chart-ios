@@ -239,7 +239,7 @@ struct ChartView: View {
             }
             
             // 汇率显示
-            Text("USD/CNY \(String(format: "%.4f", viewModel.currentRate))")
+            Text("\(String(format: "%.4f", viewModel.currentRate))  ¥\(String(format: "%.2f", viewModel.currentPrice * viewModel.currentRate / ChartViewModel.gramPerOunce))/g")
                 .font(.system(size: 10))
                 .foregroundColor(AppColors.textTertiary)
         }
@@ -437,7 +437,7 @@ struct ChartView: View {
     private func formatIndicatorValue(_ value: Double?) -> String {
         guard let v = value else { return "--" }
         if viewModel.useCNY {
-            return String(format: "%.2f", v * viewModel.currentRate)
+            return String(format: "%.2f", v * viewModel.currentRate / ChartViewModel.gramPerOunce)
         }
         return String(format: "%.2f", v)
     }

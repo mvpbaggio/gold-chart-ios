@@ -73,36 +73,43 @@ class ChartViewModel: ObservableObject {
         Task { await refresh() }
     }
     
-    // MARK: - 人民币计价
+    // MARK: - 人民币计价（元/克）
+    /// 1金衡盎司 = 31.1034768克
+    static let gramPerOunce: Double = 31.1034768
     
     /// 当前汇率
     var currentRate: Double {
         RealTimeService.shared.exchangeRate
     }
     
-    /// 人民币价格
+    /// 盎司→克换算系数
+    var ounceToGram: Double {
+        Self.gramPerOunce
+    }
+    
+    /// 人民币价格（元/克）
     var cnyPrice: Double {
-        currentPrice * currentRate
+        currentPrice * currentRate / ounceToGram
     }
     
-    /// 人民币涨跌额
+    /// 人民币涨跌额（元/克）
     var cnyChange: Double {
-        priceChange * currentRate
+        priceChange * currentRate / ounceToGram
     }
     
-    /// 人民币涨跌幅
+    /// 人民币涨跌幅（沿用百分比不变）
     var cnyChangePercent: Double {
-        changePercent * currentRate
+        changePercent
     }
     
-    /// 人民币最高
+    /// 人民币最高（元/克）
     var cnyHigh: Double {
-        todayHigh * currentRate
+        todayHigh * currentRate / ounceToGram
     }
     
-    /// 人民币最低
+    /// 人民币最低（元/克）
     var cnyLow: Double {
-        todayLow * currentRate
+        todayLow * currentRate / ounceToGram
     }
     
     /// 获取实时价格（按币种）
@@ -127,15 +134,15 @@ class ChartViewModel: ObservableObject {
     }
     
     var displayLabel: String {
-        useCNY ? "\(selectedProduct.displayName)/CNY" : selectedProduct.displayName
+        useCNY ? "\(selectedProduct.displayName)" : selectedProduct.displayName
     }
     
     /// 获取换算后的K线数据供图表使用
     var displayKlines: [Kline] {
         if useCNY {
+            let rate = currentRate / ounceToGram
             return realtimeKlines.map { kline in
-                let rate = currentRate
-                return Kline(
+                Kline(
                     timestamp: kline.timestamp,
                     open: kline.open * rate,
                     high: kline.high * rate,
@@ -319,7 +326,7 @@ class ChartViewModel: ObservableObject {
     
     var stopLossLevels: [(price: Double, label: String, color: String)] {
         var levels: [(Double, String, String)] = []
-        let rate = useCNY ? currentRate : 1
+        let rate = useCNY ? (currentRate / ounceToGram) : 1
         for signal in activeSignals {
             guard let sl = signal.stopLoss else { continue }
             let slPrice = sl * rate
