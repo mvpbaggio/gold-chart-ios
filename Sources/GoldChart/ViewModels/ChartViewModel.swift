@@ -24,6 +24,8 @@ class ChartViewModel: ObservableObject {
     
     // 实时K线（最后一根K线随实时行情延伸）
     @Published var realtimeKlines: [Kline] = []
+    /// 历史K线数量（超出此范围的为实时延伸的K线，不修改雅虎数据）
+    private var historicalCount: Int = 0
     
     // 选中的指标
     @Published var showMA = false
@@ -158,42 +160,38 @@ class ChartViewModel: ObservableObject {
     // MARK: - 实时K线延伸
     
     private func updateRealtimeCandle(quote: RealTimeQuote) {
-        guard !realtimeKlines.isEmpty else { return }
-        var updated = realtimeKlines
-        var last = updated.removeLast()
+        guard !realtimeKlines.isEmpty, historicalCount > 0 else { return }
         
-        // 如果实时行情时间超过K线周期，则新建一根（正常情况）
-        // 否则更新最后一根的最高/最低/收盘
-        let lastKlineTime = last.timestamp
         let timePerCandle = periodInSeconds
         let now = Date().timeIntervalSince1970 * 1000
+        var updated = realtimeKlines
         
-        if now - lastKlineTime >= timePerCandle {
-            // 新K线：使用当前实时数据
-            let newCandle = Kline(
-                timestamp: lastKlineTime + timePerCandle,
+        if updated.count <= historicalCount {
+            // 只有历史K线，附加上一根实时K线
+            let lastTime = updated.last!.timestamp
+            let periodsSince = max(1, Int((now - lastTime) / timePerCandle))
+            let liveTime = lastTime + timePerCandle * Double(periodsSince)
+            updated.append(Kline(
+                timestamp: liveTime,
                 open: quote.price,
                 high: quote.price,
                 low: quote.price,
                 close: quote.price,
                 volume: 0
-            )
-            updated.append(last)
-            updated.append(newCandle)
+            ))
         } else {
-            // 更新最后一根
-            let newHigh = max(last.open, last.close, quote.price, last.high)
-            let newLow = min(last.open, last.close, quote.price, last.low)
-            let newClose = quote.price
-            let updatedLast = Kline(
-                timestamp: last.timestamp,
-                open: last.open,
+            // 已有实时K线，更新最后一根（不碰历史数据）
+            var live = updated.removeLast()
+            let newHigh = max(live.open, live.close, quote.price, live.high)
+            let newLow = min(live.open, live.close, quote.price, live.low)
+            updated.append(Kline(
+                timestamp: live.timestamp,
+                open: live.open,
                 high: newHigh,
                 low: newLow,
-                close: newClose,
-                volume: last.volume
-            )
-            updated.append(updatedLast)
+                close: quote.price,
+                volume: 0
+            ))
         }
         
         realtimeKlines = updated
@@ -226,6 +224,7 @@ class ChartViewModel: ObservableObject {
             )
             klines = fetched
             realtimeKlines = fetched
+            historicalCount = fetched.count
             if !fetched.isEmpty {
                 assessment = SignalEngine.evaluateSignals(klines: fetched)
                 signalMarkers = SignalEngine.detectPerCandleSignals(fetched)
@@ -236,6 +235,7 @@ class ChartViewModel: ObservableObject {
             let mock = MockData.generateKlines(count: 200)
             klines = mock
             realtimeKlines = mock
+            historicalCount = mock.count
             if !mock.isEmpty {
                 assessment = SignalEngine.evaluateSignals(klines: mock)
                 signalMarkers = SignalEngine.detectPerCandleSignals(mock)

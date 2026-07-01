@@ -36,13 +36,6 @@ struct ChartView: View {
                             .onTapGesture {
                                 showSignalDetail = true
                             }
-                            
-                            // 一个亿抄底见顶信号浮标
-                            if let assessment = viewModel.assessment {
-                                BillionSignalBadge(score: assessment.score, level: assessment.level)
-                                    .padding(.trailing, 12)
-                                    .padding(.top, 8)
-                            }
                         }
                         
                         // 副图指标
@@ -508,41 +501,4 @@ struct SignalDetailSheet: View {
     }
 }
 
-// MARK: - 一个亿抄底见顶信号浮标
-@available(iOS 14.0, *)
-struct BillionSignalBadge: View {
-    let score: Int
-    let level: String
-    
-    var body: some View {
-        VStack(spacing: 2) {
-            Text("💰 一个亿")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundColor(signalColor)
-            
-            Text("\(score)")
-                .font(.system(size: 20, weight: .heavy))
-                .foregroundColor(signalColor)
-            
-            Text(level.prefix(4))
-                .font(.system(size: 9, weight: .medium))
-                .foregroundColor(signalColor)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background(Color.black.opacity(0.75))
-        .cornerRadius(8)
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(signalColor.opacity(0.5), lineWidth: 1)
-        )
-    }
-    
-    private var signalColor: Color {
-        if score >= 75 { return AppColors.red }
-        if score >= 60 { return Color.orange }
-        if score >= 45 { return AppColors.textSecondary }
-        if score >= 30 { return Color.orange }
-        return AppColors.green
-    }
-}
+
