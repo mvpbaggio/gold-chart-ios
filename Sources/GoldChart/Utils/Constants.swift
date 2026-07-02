@@ -49,8 +49,14 @@ extension Color {
 
 // MARK: - API 配置
 struct API {
-    // 黄金/白银数据：aurumrates.com（免费，无需Key）
-    static let goldBase = "https://aurumrates.com/api/chart"
+    // 黄金/白银数据代理（我们的服务器）
+    // 可在设置页面修改，默认通过 nginx 28789 端口访问
+    static var proxyBase: String {
+        UserDefaults.standard.string(forKey: "proxy_url") ?? "http://192.168.0.114:28789/api"
+    }
+    static func setProxyURL(_ url: String) {
+        UserDefaults.standard.set(url, forKey: "proxy_url")
+    }
     
     // A股：新浪财经
     static let sinaSearch = "https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15&key="
@@ -67,9 +73,9 @@ struct Constants {
 
 // MARK: - 模拟数据
 struct MockData {
-    static func generateKlines(count: Int = 200) -> [Kline] {
+    static func generateKlines(count: Int = 200, basePrice: Double = 2330.0) -> [Kline] {
         var klines: [Kline] = []
-        var price: Double = 2330.0
+        var price: Double = basePrice
         let now = Date().timeIntervalSince1970 * 1000
         
         for i in 0..<count {

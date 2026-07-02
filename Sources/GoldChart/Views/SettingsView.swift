@@ -2,6 +2,9 @@ import SwiftUI
 
 @available(iOS 14.0, *)
 struct SettingsView: View {
+    @State private var proxyURL: String = API.proxyBase
+    @State private var showSaved = false
+    
     var body: some View {
         ScrollView {
             VStack(spacing: 16) {
@@ -28,35 +31,44 @@ struct SettingsView: View {
                 .overlay(RoundedRectangle(cornerRadius: 12).stroke(AppColors.cardBorder, lineWidth: 1))
                 .padding(.horizontal, 12)
                 
-                // 数据源信息
-                settingsSection("数据源") {
+                // 代理服务器配置
+                settingsSection("代理服务器") {
                     VStack(spacing: 8) {
                         HStack {
-                            Image(systemName: "checkmark.circle.fill")
-                                .foregroundColor(AppColors.green)
+                            Image(systemName: "server.rack")
+                                .foregroundColor(AppColors.gold)
                                 .font(.system(size: 14))
-                            Text("黄金/白银")
+                            Text("K线数据代理")
                                 .font(.system(size: 13))
                                 .foregroundColor(AppColors.textSecondary)
                             Spacer()
-                            Text("aurumrates.com")
-                                .font(.system(size: 13))
-                                .foregroundColor(AppColors.textPrimary)
-                        }
-                        HStack {
-                            Image(systemName: "checkmark.circle.fill")
+                            Text("优先使用")
+                                .font(.system(size: 11))
                                 .foregroundColor(AppColors.green)
-                                .font(.system(size: 14))
-                            Text("A股行情")
-                                .font(.system(size: 13))
-                                .foregroundColor(AppColors.textSecondary)
-                            Spacer()
-                            Text("新浪财经")
-                                .font(.system(size: 13))
-                                .foregroundColor(AppColors.textPrimary)
                         }
                         
-                        Text("所有数据源均为免费开放接口，无需配置")
+                        TextField("代理URL", text: $proxyURL)
+                            .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .font(.system(size: 13))
+                            .autocapitalization(.none)
+                            .disableAutocorrection(true)
+                            .onChange(of: proxyURL) { newValue in
+                                API.setProxyURL(newValue)
+                            }
+                        
+                        HStack {
+                            Text("默认: http://192.168.0.114:28789/api")
+                                .font(.system(size: 10))
+                                .foregroundColor(AppColors.textTertiary)
+                            Spacer()
+                            if showSaved {
+                                Text("✓ 已保存")
+                                    .font(.system(size: 10))
+                                    .foregroundColor(AppColors.green)
+                            }
+                        }
+                        
+                        Text("如果代理不可用，自动回退到 Yahoo Finance 直连 + 模拟数据")
                             .font(.system(size: 11))
                             .foregroundColor(AppColors.textTertiary)
                             .padding(.top, 4)
