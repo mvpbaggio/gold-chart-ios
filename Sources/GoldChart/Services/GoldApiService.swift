@@ -16,8 +16,8 @@ class GoldApiService {
     
     /// 获取K线数据（自动回退）
     func fetchKlines(product: ProductType, period: KlinePeriod, count: Int = 500) async throws -> [Kline] {
-        // 1. 尝试代理服务器
-        if let proxyResult = try? await fetchFromProxy(product: product, period: period, count: count) {
+        // 1. 尝试代理服务器（只有配置了URL才走）
+        if !API.proxyBase.isEmpty, let proxyResult = try? await fetchFromProxy(product: product, period: period, count: count) {
             return proxyResult
         }
         
@@ -82,9 +82,12 @@ class GoldApiService {
         }
     }
     
-    // MARK: - Yahoo Finance（带域轮换和重试）
+    // MARK: - Yahoo Finance（带域轮换、重试、随机延迟）
     
     private func fetchFromYahoo(product: ProductType, period: KlinePeriod) async throws -> [Kline] {
+        // 随机延迟 0.5-2秒，分散请求避免限流
+        let jitter = Double.random(in: 0.5...2.0)
+        try await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000_000))
         let (range, interval) = mapPeriod(period)
         let symbol = product == .xau ? "GC=F" : "SI=F"
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? symbol

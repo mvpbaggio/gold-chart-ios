@@ -49,10 +49,11 @@ extension Color {
 
 // MARK: - API 配置
 struct API {
-    // 黄金/白银数据代理（我们的服务器）
-    // 可在设置页面修改，默认通过 nginx 28789 端口访问
+    // 黄金/白银数据代理（可选，默认不走）
+    // 在家里WiFi下可设置：http://192.168.0.114:28789/api
+    // 在外面或设置空字符串 = 直接走 Yahoo + 模拟兜底
     static var proxyBase: String {
-        UserDefaults.standard.string(forKey: "proxy_url") ?? "http://192.168.0.114:28789/api"
+        UserDefaults.standard.string(forKey: "proxy_url") ?? ""
     }
     static func setProxyURL(_ url: String) {
         UserDefaults.standard.set(url, forKey: "proxy_url")
