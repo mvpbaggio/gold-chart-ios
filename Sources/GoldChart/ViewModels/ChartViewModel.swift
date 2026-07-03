@@ -36,6 +36,7 @@ class ChartViewModel: ObservableObject {
     @Published var showKDJ = false
     @Published var showBOLL = false
     @Published var showVolume = true
+    @Published var showSuperTrend = true
     @Published var showOldMarkers = false  // 旧版信号三角/止损（默认关闭，看综合评分就够了）
     
     @Published var selectedIndicator: IndicatorType? = nil
@@ -51,6 +52,7 @@ class ChartViewModel: ObservableObject {
         case atr = "ATR"
         case obv = "OBV"
         case ichimoku = "云图"
+        case supertrend = "SuperTrend"
         
         var displayName: String { self.rawValue }
     }
@@ -399,6 +401,10 @@ class ChartViewModel: ObservableObject {
     
     func computeIchimoku() -> IchimokuResult {
         IndicatorEngine.ichimoku(realtimeKlines)
+    }
+    
+    func computeSuperTrend(period: Int = 10, multiplier: Double = 3.0) -> SuperTrendResult {
+        IndicatorEngine.superTrend(realtimeKlines, period: period, multiplier: multiplier)
     }
     
     // MARK: - 当前价格信息（原始USD价）

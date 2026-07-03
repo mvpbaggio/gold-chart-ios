@@ -348,6 +348,67 @@ class IndicatorEngine {
         return result
     }
     
+    // MARK: - SuperTrend
+    static func superTrend(_ data: [Kline], period: Int = 10, multiplier: Double = 3.0) -> SuperTrendResult {
+        let n = data.count
+        var result: [Double?] = Array(repeating: nil, count: n)
+        var direction: [Int] = Array(repeating: 0, count: n)
+        
+        let atrValues = atr(data, period: period)
+        guard n > period else { return SuperTrendResult(supertrend: result, direction: direction) }
+        
+        var upperBand: [Double?] = Array(repeating: nil, count: n)
+        var lowerBand: [Double?] = Array(repeating: nil, count: n)
+        
+        for i in 0..<n {
+            guard let atr = atrValues[i] else { continue }
+            let hl2 = (data[i].high + data[i].low) / 2.0
+            upperBand[i] = hl2 + multiplier * atr
+            lowerBand[i] = hl2 - multiplier * atr
+        }
+        
+        var finalUpperBand: [Double?] = Array(repeating: nil, count: n)
+        var finalLowerBand: [Double?] = Array(repeating: nil, count: n)
+        
+        for i in period..<n {
+            if i == period {
+                finalUpperBand[i] = upperBand[i]
+                finalLowerBand[i] = lowerBand[i]
+            } else {
+                if let ub = upperBand[i], let pub = finalUpperBand[i-1], let prevClose = data[i-1].close as Double? {
+                    finalUpperBand[i] = ub < pub || prevClose > pub ? ub : pub
+                } else {
+                    finalUpperBand[i] = upperBand[i]
+                }
+                if let lb = lowerBand[i], let plb = finalLowerBand[i-1], let prevClose = data[i-1].close as Double? {
+                    finalLowerBand[i] = lb > plb || prevClose < plb ? lb : plb
+                } else {
+                    finalLowerBand[i] = lowerBand[i]
+                }
+            }
+            
+            if i == period {
+                direction[i] = data[i].close <= (finalUpperBand[i] ?? 0) ? -1 : 1
+            } else {
+                if let fub = finalUpperBand[i], let flb = finalLowerBand[i] {
+                    if data[i].close <= fub && direction[i-1] == 1 {
+                        direction[i] = -1
+                    } else if data[i].close >= flb && direction[i-1] == -1 {
+                        direction[i] = 1
+                    } else {
+                        direction[i] = direction[i-1]
+                    }
+                } else {
+                    direction[i] = direction[i-1]
+                }
+            }
+            
+            result[i] = direction[i] == 1 ? finalLowerBand[i] : finalUpperBand[i]
+        }
+        
+        return SuperTrendResult(supertrend: result, direction: direction)
+    }
+    
     // MARK: - 一目均衡表 (云图)
     static func ichimoku(_ data: [Kline]) -> IchimokuResult {
         let n = data.count

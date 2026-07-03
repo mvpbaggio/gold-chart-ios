@@ -43,8 +43,11 @@ class SignalEngine {
         // 10. 威廉%R (7%)
         breakdowns.append(scoreWilliams(data, weight: 0.07))
         
-        // 11. K线形态 (8%)
-        breakdowns.append(scoreCandlestick(data, weight: 0.08))
+        // 11. K线形态 (6%)
+        breakdowns.append(scoreCandlestick(data, weight: 0.06))
+        
+        // 12. SuperTrend (8%)
+        breakdowns.append(scoreSuperTrend(data, weight: 0.08))
         
         // 计算加权总分
         var totalScore: Double = 0
@@ -427,6 +430,36 @@ class SignalEngine {
         }
         
         return SignalBreakdown(name: "K线形态", score: 0, weight: weight)
+    }
+    
+    // MARK: - 12. SuperTrend
+    private static func scoreSuperTrend(_ data: [Kline], weight: Double) -> SignalBreakdown {
+        guard data.count >= 20 else {
+            return SignalBreakdown(name: "SuperTrend", score: 0, weight: weight)
+        }
+        
+        let st10 = IndicatorEngine.superTrend(data, period: 10, multiplier: 3.0)
+        let st20 = IndicatorEngine.superTrend(data, period: 20, multiplier: 3.0)
+        
+        guard let st10v = st10.direction.last, st10v != 0,
+              let st20v = st20.direction.last, st20v != 0 else {
+            return SignalBreakdown(name: "SuperTrend", score: 0, weight: weight)
+        }
+        
+        // 短中期都多头 → 强多
+        if st10v == 1 && st20v == 1 {
+            return SignalBreakdown(name: "SuperTrend双多", score: 60, weight: weight)
+        }
+        // 短多中空 → 反弹
+        if st10v == 1 && st20v == -1 {
+            return SignalBreakdown(name: "SuperTrend短多", score: 20, weight: weight)
+        }
+        // 短空中多 → 回调
+        if st10v == -1 && st20v == 1 {
+            return SignalBreakdown(name: "SuperTrend短空", score: -20, weight: weight)
+        }
+        // 双空
+        return SignalBreakdown(name: "SuperTrend双空", score: -60, weight: weight)
     }
     
     // MARK: - 逐根K线历史评分信号

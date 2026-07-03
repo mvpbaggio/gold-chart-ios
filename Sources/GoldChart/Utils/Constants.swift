@@ -19,6 +19,7 @@ struct AppColors {
     static let indicatorMACD = Color(hex: "79C0FF")
     static let indicatorRSI = Color(hex: "D2A8FF")
     static let indicatorVolume = Color(hex: "58A6FF")
+    static let indicatorSuperTrend = Color(hex: "00E5FF")  // 青色
 }
 
 extension Color {

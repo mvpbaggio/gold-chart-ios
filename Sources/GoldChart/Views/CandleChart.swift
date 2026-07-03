@@ -213,6 +213,16 @@ struct CandleChartContainer: UIViewRepresentable {
             sets.append(createLineDataSet(values: mapOpt(boll.lower), clr: AppColors.textTertiary, label: "LOW"))
         }
         
+        if viewModel.showSuperTrend {
+            let st = viewModel.computeSuperTrend()
+            let st10 = st.supertrend
+            // SuperTrend with factor
+            let stFactored: [Double?] = st10.map { $0.map { v in v * factor } }
+            let stSet = createLineDataSet(values: stFactored, clr: AppColors.indicatorSuperTrend, label: "ST10")
+            stSet.lineWidth = 1.5
+            sets.append(stSet)
+        }
+        
         return sets
     }
     

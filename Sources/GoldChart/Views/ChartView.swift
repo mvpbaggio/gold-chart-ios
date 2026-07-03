@@ -468,6 +468,18 @@ struct ChartView: View {
                         .cornerRadius(4)
                 }
                 
+                Button(action: {
+                    viewModel.showSuperTrend.toggle()
+                }) {
+                    Text("SuperTrend")
+                        .font(.system(size: 11))
+                        .foregroundColor(viewModel.showSuperTrend ? AppColors.gold : AppColors.textSecondary)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(viewModel.showSuperTrend ? AppColors.gold.opacity(0.12) : AppColors.cardBackground)
+                        .cornerRadius(4)
+                }
+                
                 ForEach(ChartViewModel.IndicatorType.allCases, id: \.rawValue) { indicator in
                     Button(action: {
                         viewModel.selectedIndicator = viewModel.selectedIndicator == indicator ? nil : indicator

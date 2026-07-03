@@ -211,6 +211,11 @@ struct BollingerResult {
     let lower: [Double?]
 }
 
+struct SuperTrendResult {
+    let supertrend: [Double?]
+    let direction: [Int]  // 1=多头, -1=空头
+}
+
 struct IchimokuResult {
     let tenkan: [Double?]
     let kijun: [Double?]
