@@ -172,7 +172,7 @@ class ChartViewModel: ObservableObject {
         compositeSignal = SignalEngine.composite(realtimeKlines)
         // 实时信号：达到阈值时添加/替换最后一根K线的信号
         guard realtimeKlines.count >= 60 else { return }
-        let (marker, _) = SignalEngine.realtimeSignal(realtimeKlines)
+        let (marker, _) = SignalEngine.realtimeSignal(realtimeKlines, livePrice: realTimeQuote?.price)
         let currentMarkers = signalMarkers
         // 移除同一根K线上的实时信号，避免重复
         var filtered = currentMarkers.filter { $0.source != "实时信号" || $0.candleIndex < realtimeKlines.count - 1 }

@@ -14,8 +14,8 @@ class SignalEngine {
     
     // MARK: - 配置
     struct Config {
-        var longThreshold: Int = 20        // 评分 > 20 做多
-        var shortThreshold: Int = -20      // 评分 < -20 做空
+        var longThreshold: Int = 25        // 评分 > 25 做多
+        var shortThreshold: Int = -25      // 评分 < -25 做空
         var takeProfitPercent: Double = 5.0 // 止盈：累计涨跌幅 5%
         var stopLossMode: Int = 2          // 1=信号K线极值，2=极值±1%
         var stopLossBuffer: Double = 0.01  // 缓冲 1%
@@ -324,8 +324,8 @@ class SignalEngine {
     }
     
     // MARK: - 实时信号（最后一根K线）
-    /// 实时评分达到阈值时返回信号，否则 nil
-    static func realtimeSignal(_ data: [Kline]) -> (marker: SignalMarker?, score: Int) {
+    /// 实时评分达到阈值时返回信号，否则 nil。价格用实时价（K线未走完时 close 滞后，图标会画偏）
+    static func realtimeSignal(_ data: [Kline], livePrice: Double? = nil) -> (marker: SignalMarker?, score: Int) {
         guard data.count >= 60, let last = data.last else {
             return (nil, 0)
         }
@@ -333,7 +333,8 @@ class SignalEngine {
         let cs = composite(data)
         let score = cs.score
         let candle = last
-        let close = candle.close
+        // 实时价优先，无则回退K线close
+        let close = livePrice ?? candle.close
         
         guard score >= config.longThreshold || score <= config.shortThreshold else {
             return (nil, score)

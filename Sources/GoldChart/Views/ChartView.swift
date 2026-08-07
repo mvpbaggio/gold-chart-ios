@@ -299,7 +299,7 @@ struct ChartView: View {
     private var signalListView: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(viewModel.signalMarkers.suffix(20)) { signal in
+                ForEach(viewModel.signalMarkers.suffix(5)) { signal in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 2) {
                             Image(systemName: signal.type == .longOpen ? "arrowtriangle.up.fill" : "arrowtriangle.down.fill")

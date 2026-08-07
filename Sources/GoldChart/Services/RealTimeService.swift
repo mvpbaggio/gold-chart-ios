@@ -158,8 +158,9 @@ class RealTimeService: ObservableObject {
             let high = (d["f44"] as? NSNumber)?.doubleValue ?? 0
             let low = (d["f45"] as? NSNumber)?.doubleValue ?? 0
             let prevClose = (d["f60"] as? NSNumber)?.doubleValue ?? 0
-            let change = price - prevClose
-            let changePercent = prevClose > 0 ? (change / prevClose) * 100 : 0
+            let prevCloseScaled = prevClose / scale
+            let change = price - prevCloseScaled
+            let changePercent = prevCloseScaled > 0 ? (change / prevCloseScaled) * 100 : 0
             
             let quote = RealTimeQuote(
                 price: price,
@@ -207,8 +208,10 @@ class RealTimeService: ObservableObject {
     }
     
     private func parseSinaResponse(_ text: String, product: ProductType) {
-        // 新浪现货格式: var hq_str_hf_XAU="现价,?,开盘,?,最高,最低,时间,买价,卖价,...,日期,名称"
-        // [0]现价 [2]今开 [4]最高 [5]最低 [6]时间 [7]买一 [8]卖一 [12]日期 [13]名称
+        // 新浪现货格式（用东财字段交叉验证过）:
+        // var hq_str_hf_XAU="现价,昨收,现价,今开,最高,最低,时间,买一,卖一,...,日期,名称"
+        // [0]现价 [1]昨收 [2]重复现价 [3]今开 [4]最高 [5]最低 [6]时间 [7]买一 [8]卖一 [12]日期 [13]名称
+        // ⚠️ 旧代码把[2]当今开，但[2]实际等于现价 → 涨跌恒为0，涨跌幅永远0%
         guard let dataStart = text.firstIndex(of: "\""),
               let dataEnd = text.lastIndex(of: "\""),
               dataStart < dataEnd else { return }
@@ -218,7 +221,7 @@ class RealTimeService: ObservableObject {
         
         guard parts.count >= 9,
               let price = Double(parts[0]),
-              let open = Double(parts[2]),
+              let open = Double(parts[3]),
               let high = Double(parts[4]),
               let low = Double(parts[5]) else { return }
         
@@ -226,9 +229,10 @@ class RealTimeService: ObservableObject {
         let date = parts.count > 12 ? parts[12] : ""
         let bid = Double(parts[7])
         let ask = Double(parts[8])
-        // 新浪无昨收字段：用今开作基准算涨跌
-        let change = price - open
-        let changePercent = open > 0 ? (change / open) * 100 : 0
+        // 昨收=parts[1]，涨跌幅按昨收算（与东财口径一致）
+        let prevClose = Double(parts[1]) ?? open
+        let change = price - prevClose
+        let changePercent = prevClose > 0 ? (change / prevClose) * 100 : 0
         
         let quote = RealTimeQuote(
             price: price,
