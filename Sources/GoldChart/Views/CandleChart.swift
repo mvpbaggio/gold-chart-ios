@@ -26,7 +26,7 @@ final class SignalBadgeOverlayView: UIView {
         let factor = vm.useCNY ? vm.currentRate / ChartViewModel.gramPerOunce : 1.0
         let transformer = chart.getTransformer(forAxis: .left)
         
-        for sig in vm.signalMarkers where sig.type.isEntry {
+        for sig in vm.signalMarkers.filter({ $0.type.isEntry }).suffix(5) {
             guard sig.candleIndex < klines.count else { continue }
             let idx = sig.candleIndex
             // 多→最低点下方；空→最高点上方（偏移用固定像素 24pt，避免金价高位时偏移不可见）
@@ -162,28 +162,7 @@ struct CandleChartContainer: UIViewRepresentable {
             liveLl.valueFont = UIFont.boldSystemFont(ofSize: 11)
             leftAxis.addLimitLine(liveLl)
         }
-        
-        // 最新1个信号的止损/止盈线（止损 rightTop / 止盈 rightBottom，避免标签重叠）
-        if let signal = viewModel.signalMarkers.last,
-           let sl = signal.stopLoss, let st = signal.stopTarget {
-            let factor = displayFactor
-            
-            let slLl = ChartLimitLine(limit: sl * factor, label: "止损 \(String(format: "%.1f", sl * factor))")
-            slLl.labelPosition = .rightTop
-            slLl.lineWidth = 1
-            slLl.lineDashLengths = [4, 4]
-            slLl.lineColor = UIColor(AppColors.green)
-            slLl.valueTextColor = UIColor(AppColors.green)
-            leftAxis.addLimitLine(slLl)
-            
-            let stLl = ChartLimitLine(limit: st * factor, label: "止盈 \(String(format: "%.1f", st * factor))")
-            stLl.labelPosition = .rightBottom
-            stLl.lineWidth = 1
-            stLl.lineDashLengths = [4, 4]
-            stLl.lineColor = UIColor(AppColors.red)
-            stLl.valueTextColor = UIColor(AppColors.red)
-            leftAxis.addLimitLine(stLl)
-        }
+        // 止盈/止损虚线：超哥要求去掉（2026-08-07）
     }
     
     private func configureChart(_ chart: CandleStickChartView, context: Context) {
