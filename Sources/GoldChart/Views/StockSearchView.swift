@@ -196,6 +196,8 @@ struct StockMiniChart: UIViewRepresentable {
         xAxis.setLabelCount(4, force: false)
         xAxis.avoidFirstLastClippingEnabled = true
         xAxis.granularity = 1
+        xAxis.spaceMin = 1   // 左侧留1根K线空间
+        xAxis.spaceMax = 3   // 右侧留3根K线空间（最新K线不贴边）
         
         let leftAxis = chart.leftAxis
         leftAxis.labelTextColor = UIColor(AppColors.textTertiary)
