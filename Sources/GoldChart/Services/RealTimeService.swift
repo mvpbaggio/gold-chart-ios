@@ -2,7 +2,7 @@ import Foundation
 import Combine
 
 /// 实时行情服务（每5秒轮询）
-/// 数据源：东方财富现货 122.XAU/122.XAG（主）→ 腾讯财经 qt.gtimg.cn hf_GC/hf_SI（备）
+/// 数据源：东方财富现货 122.XAU/122.XAG（主）→ 新浪现货 hf_XAU/hf_XAG（备，同标的，避免期货/现货跳变）
 class RealTimeService: ObservableObject {
     static let shared = RealTimeService()
     
@@ -22,9 +22,10 @@ class RealTimeService: ObservableObject {
     private var hostIdx = 0
     /// 东财f59缩放因子缓存（每品种不同，默认100）
     private var scaleCache: [ProductType: Double] = [:]
-    private let tencentCodes: [ProductType: String] = [
-        .xau: "hf_GC",     // 纽约黄金（COMEX，与日K数据源 GC 一致）
-        .xag: "hf_SI",     // 纽约白银（COMEX，与日K数据源 SI 一致）
+    /// 新浪现货代码（伦敦金/银，与东财同标的——备用源必须同标的，否则价格跳变）
+    private let sinaCodes: [ProductType: String] = [
+        .xau: "hf_XAU",     // 伦敦金（现货黄金）
+        .xag: "hf_XAG",     // 伦敦银（现货白银）
     ]
     
     private init() {}
@@ -130,14 +131,14 @@ class RealTimeService: ObservableObject {
         URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
             guard let self = self, let data = data, error == nil,
                   let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-                // 东财失败 → 腾讯备用
-                self?.fetchFromTencent(product: product)
+                // 东财失败 → 新浪现货备用（同标的，防跳变）
+                self?.fetchFromSina(product: product)
                 return
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let d = json["data"] as? [String: Any],
                   let priceRaw = d["f43"] as? NSNumber else {
-                self.fetchFromTencent(product: product)
+                self.fetchFromSina(product: product)
                 return
             }
             
@@ -180,34 +181,34 @@ class RealTimeService: ObservableObject {
         }.resume()
     }
     
-    // MARK: - 腾讯财经实时（备用）
+    // MARK: - 新浪现货实时（备用，同标的防跳变）
     
-    private func fetchFromTencent(product: ProductType) {
-        guard let code = tencentCodes[product] else { return }
+    private func fetchFromSina(product: ProductType) {
+        guard let code = sinaCodes[product] else { return }
         
-        let urlStr = "https://qt.gtimg.cn/q=\(code)"
+        let urlStr = "https://hq.sinajs.cn/list=\(code)"
         guard let url = URL(string: urlStr) else { return }
         
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
                         forHTTPHeaderField: "User-Agent")
-        request.setValue("https://gu.qq.com", forHTTPHeaderField: "Referer")
+        request.setValue("https://finance.sina.com.cn", forHTTPHeaderField: "Referer")
         request.timeoutInterval = 3
         
         URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
             guard let data = data, error == nil else { return }
             
-            // 腾讯返回 GBK 编码；报价字段全是 ASCII，中文字段（名称）用 UTF-8 替换字符即可
+            // 新浪中文字段（名称）是 GBK 编码，用 UTF-8 替换即可；报价字段0~12全是 ASCII 不受影响
             let text = String(decoding: data, as: UTF8.self)
             DispatchQueue.main.async {
-                self?.parseResponse(text, product: product)
+                self?.parseSinaResponse(text, product: product)
             }
         }.resume()
     }
     
-    private func parseResponse(_ text: String, product: ProductType) {
-        // 腾讯格式: v_hf_GC="4315.89,0.38,4315.20,4315.50,4320.80,4288.00,11:29:03,4299.60,4298.30,0,1,1,2026-08-07,纽约黄金"
-        // [0]现价 [1]涨跌额 [2]今开 [3]昨收 [4]最高 [5]最低 [6]时间 [7]买一 [8]卖一 [12]日期 [13]名称
+    private func parseSinaResponse(_ text: String, product: ProductType) {
+        // 新浪现货格式: var hq_str_hf_XAU="现价,?,开盘,?,最高,最低,时间,买价,卖价,...,日期,名称"
+        // [0]现价 [2]今开 [4]最高 [5]最低 [6]时间 [7]买一 [8]卖一 [12]日期 [13]名称
         guard let dataStart = text.firstIndex(of: "\""),
               let dataEnd = text.lastIndex(of: "\""),
               dataStart < dataEnd else { return }
@@ -215,20 +216,19 @@ class RealTimeService: ObservableObject {
         let content = String(text[text.index(after: dataStart)..<dataEnd])
         let parts = content.components(separatedBy: ",")
         
-        guard parts.count >= 13,
+        guard parts.count >= 9,
               let price = Double(parts[0]),
-              let change = Double(parts[1]),
               let open = Double(parts[2]),
               let high = Double(parts[4]),
               let low = Double(parts[5]) else { return }
         
         let time = parts[6]
-        let date = parts[12]
+        let date = parts.count > 12 ? parts[12] : ""
         let bid = Double(parts[7])
         let ask = Double(parts[8])
-        // 昨收 = 现价 - 涨跌额；涨跌幅按昨收计算
-        let prevClose = price - change
-        let changePercent = prevClose > 0 ? (change / prevClose) * 100 : 0
+        // 新浪无昨收字段：用今开作基准算涨跌
+        let change = price - open
+        let changePercent = open > 0 ? (change / open) * 100 : 0
         
         let quote = RealTimeQuote(
             price: price,

@@ -19,11 +19,11 @@ enum ProductType: String, CaseIterable {
         }
     }
     
-    /// 新浪期货代码（外盘 COMEX）
+    /// 新浪现货代码（伦敦金/银，与东财 122.XAU/122.XAG 同标的，防期货/现货跳变）
     var sinaSymbols: [String] {
         switch self {
-        case .xau: return ["GC"]
-        case .xag: return ["SI"]
+        case .xau: return ["XAU"]
+        case .xag: return ["XAG"]
         }
     }
     
