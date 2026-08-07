@@ -528,7 +528,7 @@ struct ChartView: View {
             HStack(spacing: 20) {
                 indicatorLabel("MA5", value: formatIndicatorValue(ma5.last ?? nil), color: AppColors.indicatorMA)
                 indicatorLabel("MA10", value: formatIndicatorValue(ma10.last ?? nil), color: AppColors.indicatorEMA)
-                indicatorLabel("MA20", value: formatIndicatorValue(ma20.last ?? nil), color: AppColors.textSecondary)
+                indicatorLabel("MA20", value: formatIndicatorValue(ma20.last ?? nil), color: AppColors.indicatorMA20)
             }
             
             let macd = viewModel.computeMACD()

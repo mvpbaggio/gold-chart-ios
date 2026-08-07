@@ -40,12 +40,13 @@ struct CandleChartContainer: UIViewRepresentable {
         
         let currentPrice = klines.last?.close ?? 0
         if currentPrice > 0 {
-            let liveLl = ChartLimitLine(limit: currentPrice, label: "$\(String(format: "%.2f", currentPrice))")
+            let liveLl = ChartLimitLine(limit: currentPrice, label: "\(String(format: "%.2f", currentPrice))")
             liveLl.labelPosition = .rightTop
-            liveLl.lineWidth = 1.5
-            liveLl.lineColor = UIColor.gray.withAlphaComponent(0.5)
-            liveLl.valueTextColor = UIColor.gray.withAlphaComponent(0.7)
-            liveLl.valueFont = UIFont.boldSystemFont(ofSize: 10)
+            liveLl.lineWidth = 1
+            liveLl.lineDashLengths = [4, 3]   // 红虚线现价线（同花顺）
+            liveLl.lineColor = UIColor(AppColors.red)
+            liveLl.valueTextColor = UIColor(AppColors.red)
+            liveLl.valueFont = UIFont.boldSystemFont(ofSize: 11)
             leftAxis.addLimitLine(liveLl)
         }
         
@@ -81,7 +82,7 @@ struct CandleChartContainer: UIViewRepresentable {
         let xAxis = chart.xAxis
         xAxis.labelPosition = .bottom
         xAxis.labelTextColor = UIColor(AppColors.textTertiary)
-        xAxis.gridColor = UIColor(AppColors.cardBorder)
+        xAxis.gridColor = UIColor(hex: "F2F2F7")   // 同花顺浅灰网格
         xAxis.avoidFirstLastClippingEnabled = true
         xAxis.granularity = 1
         xAxis.setLabelCount(6, force: false)
@@ -97,7 +98,7 @@ struct CandleChartContainer: UIViewRepresentable {
         // 左Y轴
         let leftAxis = chart.leftAxis
         leftAxis.labelTextColor = UIColor(AppColors.textTertiary)
-        leftAxis.gridColor = UIColor(AppColors.cardBorder)
+        leftAxis.gridColor = UIColor(hex: "F2F2F7")   // 同花顺浅灰网格
         leftAxis.labelPosition = .outsideChart
         
         // 右Y轴
@@ -132,11 +133,11 @@ struct CandleChartContainer: UIViewRepresentable {
         let dataSet = CandleChartDataSet(entries: entries, label: "")
         dataSet.axisDependency = .left
         dataSet.shadowColorSameAsCandle = true
-        dataSet.shadowWidth = 0.7
+        dataSet.shadowWidth = 1.0
         dataSet.decreasingColor = UIColor(AppColors.green)
-        dataSet.decreasingFilled = true
+        dataSet.decreasingFilled = true       // 阴线（跌）绿实心
         dataSet.increasingColor = UIColor(AppColors.red)
-        dataSet.increasingFilled = true
+        dataSet.increasingFilled = false      // 阳线（涨）红空心（同花顺）
         dataSet.neutralColor = UIColor(AppColors.textSecondary)
         dataSet.valueTextColor = UIColor.clear
         dataSet.drawValuesEnabled = false
@@ -155,21 +156,31 @@ struct CandleChartContainer: UIViewRepresentable {
         guard !viewModel.signalMarkers.isEmpty else { return [] }
         let factor = displayFactor
         
-        // 追风揽月风格：多头信号红圈「多」，空头信号绿圈「空」
-        let longEntries = viewModel.signalMarkers
-            .filter { $0.type == .longOpen }
-            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
+        // 追风揽月风格：白底红描边圈「多」（K线最低点下方），白底绿描边圈「空」（K线最高点上方）
+        // 灰色垂直虚线连接信号圈与K线极值点
+        let longSignals = viewModel.signalMarkers.filter { $0.type == .longOpen }
+        let shortSignals = viewModel.signalMarkers.filter { $0.type == .shortOpen }
         
-        let shortEntries = viewModel.signalMarkers
-            .filter { $0.type == .shortOpen }
-            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
+        // 价格范围用于偏移量
+        let lows = klines.map { $0.low }
+        let highs = klines.map { $0.high }
+        let priceRange = (highs.max() ?? 1) - (lows.min() ?? 0)
+        let offset = max(priceRange * 0.01, (highs.max() ?? 1) * 0.002)  // 信号圈距极值距离
         
         var sets: [ChartDataSetProtocol] = []
         
-        if !longEntries.isEmpty {
+        // 多头信号：「多」圈在K线最低点下方
+        if !longSignals.isEmpty {
+            let longEntries = longSignals.map { sig -> ChartDataEntry in
+                let idx = sig.candleIndex
+                let lowY = (idx < klines.count ? klines[idx].low : sig.price) * factor
+                return ChartDataEntry(x: Double(idx), y: lowY - offset)
+            }
             let s = ScatterChartDataSet(entries: longEntries, label: "多")
             s.setScatterShape(.circle)
-            s.setColor(UIColor(AppColors.red))
+            s.setColor(UIColor(AppColors.red))                 // 红描边
+            s.scatterShapeHoleColor = UIColor.white             // 白底
+            s.scatterShapeHoleRadius = 0.55                       // 空心半径（比例）
             s.scatterShapeSize = 22
             s.drawValuesEnabled = true
             s.valueFormatter = SignalValueFormatter(text: "多")
@@ -177,12 +188,38 @@ struct CandleChartContainer: UIViewRepresentable {
             s.valueFont = UIFont.boldSystemFont(ofSize: 10)
             s.axisDependency = .left
             sets.append(s)
+            
+            // 灰色垂直虚线：每个信号单独 2 点（圈位→K线最低点）
+            for sig in longSignals {
+                let idx = sig.candleIndex
+                let lowY = (idx < klines.count ? klines[idx].low : sig.price) * factor
+                let connEntries = [
+                    ChartDataEntry(x: Double(idx), y: lowY),
+                    ChartDataEntry(x: Double(idx), y: lowY - offset)
+                ]
+                let conn = LineChartDataSet(entries: connEntries, label: "")
+                conn.setColor(UIColor.gray.withAlphaComponent(0.6))
+                conn.lineWidth = 0.8
+                conn.lineDashLengths = [3, 3]
+                conn.drawCirclesEnabled = false
+                conn.drawValuesEnabled = false
+                conn.axisDependency = .left
+                sets.append(conn)
+            }
         }
         
-        if !shortEntries.isEmpty {
+        // 空头信号：「空」圈在K线最高点上方
+        if !shortSignals.isEmpty {
+            let shortEntries = shortSignals.map { sig -> ChartDataEntry in
+                let idx = sig.candleIndex
+                let highY = (idx < klines.count ? klines[idx].high : sig.price) * factor
+                return ChartDataEntry(x: Double(idx), y: highY + offset)
+            }
             let s = ScatterChartDataSet(entries: shortEntries, label: "空")
             s.setScatterShape(.circle)
-            s.setColor(UIColor(AppColors.green))
+            s.setColor(UIColor(AppColors.green))               // 绿描边
+            s.scatterShapeHoleColor = UIColor.white             // 白底
+            s.scatterShapeHoleRadius = 0.55                       // 空心半径（比例）
             s.scatterShapeSize = 22
             s.drawValuesEnabled = true
             s.valueFormatter = SignalValueFormatter(text: "空")
@@ -190,23 +227,27 @@ struct CandleChartContainer: UIViewRepresentable {
             s.valueFont = UIFont.boldSystemFont(ofSize: 10)
             s.axisDependency = .left
             sets.append(s)
+            
+            // 灰色垂直虚线：每个信号单独 2 点（圈位→K线最高点）
+            for sig in shortSignals {
+                let idx = sig.candleIndex
+                let highY = (idx < klines.count ? klines[idx].high : sig.price) * factor
+                let connEntries = [
+                    ChartDataEntry(x: Double(idx), y: highY),
+                    ChartDataEntry(x: Double(idx), y: highY + offset)
+                ]
+                let conn = LineChartDataSet(entries: connEntries, label: "")
+                conn.setColor(UIColor.gray.withAlphaComponent(0.6))
+                conn.lineWidth = 0.8
+                conn.lineDashLengths = [3, 3]
+                conn.drawCirclesEnabled = false
+                conn.drawValuesEnabled = false
+                conn.axisDependency = .left
+                sets.append(conn)
+            }
         }
         
-        // 平仓信号：小号圆点（灰色描边）
-        let closeEntries = viewModel.signalMarkers
-            .filter { $0.type == .longClose || $0.type == .shortClose }
-            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
-        
-        if !closeEntries.isEmpty {
-            let s = ScatterChartDataSet(entries: closeEntries, label: "平仓")
-            s.setScatterShape(.circle)
-            s.setColor(UIColor(AppColors.textTertiary))
-            s.scatterShapeSize = 12
-            s.drawValuesEnabled = false
-            s.axisDependency = .left
-            sets.append(s)
-        }
-        
+        // 追风揽月无独立平仓标记（多空交替=平仓+反手）
         return sets
     }
     
@@ -230,7 +271,7 @@ struct CandleChartContainer: UIViewRepresentable {
         if viewModel.showMA {
             sets.append(createLineDataSet(values: viewModel.computeMA(period: 5).map { $0.map { $0 * factor } }, clr: AppColors.indicatorMA, label: "MA5"))
             sets.append(createLineDataSet(values: viewModel.computeMA(period: 10).map { $0.map { $0 * factor } }, clr: AppColors.indicatorEMA, label: "MA10"))
-            sets.append(createLineDataSet(values: viewModel.computeMA(period: 20).map { $0.map { $0 * factor } }, clr: AppColors.textSecondary, label: "MA20"))
+            sets.append(createLineDataSet(values: viewModel.computeMA(period: 20).map { $0.map { $0 * factor } }, clr: AppColors.indicatorMA20, label: "MA20"))
         }
         
         if viewModel.showEMA {

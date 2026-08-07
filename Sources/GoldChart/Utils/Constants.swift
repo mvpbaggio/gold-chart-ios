@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - 颜色主题
 struct AppColors {
     // 追风揽月浅色风格：柔和浅蓝背景 + 白色卡片
-    static let background = Color(hex: "E8F1F9")
+    static let background = Color(hex: "DCEBFF")   // 追风揽月浅天蓝
     static let cardBackground = Color(hex: "FFFFFF")
     static let cardBorder = Color(hex: "D0DCE8")
     static let gold = Color(hex: "E6A23C")
@@ -16,8 +16,9 @@ struct AppColors {
     static let tabBarBackground = Color(hex: "B1D7FE")
     static let tabActive = Color(hex: "2563EB")
     static let tabInactive = Color(hex: "9AA8B8")
-    static let indicatorMA = Color(hex: "E6A23C")
-    static let indicatorEMA = Color(hex: "8B5CF6")
+    static let indicatorMA = Color(hex: "8E8E93")     // MA5 灰（同花顺）
+    static let indicatorEMA = Color(hex: "FF9500")    // MA10 橙黄（同花顺）
+    static let indicatorMA20 = Color(hex: "AF52DE")   // MA20 淡紫（同花顺）
     static let indicatorMACD = Color(hex: "3B82F6")
     static let indicatorRSI = Color(hex: "EC4899")
     static let indicatorVolume = Color(hex: "60A5FA")
