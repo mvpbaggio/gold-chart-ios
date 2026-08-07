@@ -1,11 +1,18 @@
 import Foundation
 
 /// 黄金/白银K线数据服务
-/// 数据源优先级：新浪财经（外盘/内盘日K周K）→ 代理服务器(可选) → Yahoo Finance（分钟K）→ Mock数据
+/// 数据源优先级：东方财富现货(122.XAU/122.XAG，全周期) → 代理服务器(可选) → 新浪财经(日K/周K) → Yahoo(分钟K) → Mock数据
 class GoldApiService {
     static let shared = GoldApiService()
     private let session: URLSession
     private let decoder = JSONDecoder()
+    
+    /// 东财K线主机（限流自动切换）
+    private let emKlineHosts = [
+        "push2his.eastmoney.com",
+        "92.push2his.eastmoney.com",
+        "1.push2his.eastmoney.com",
+    ]
     
     init() {
         let config = URLSessionConfiguration.default
@@ -16,6 +23,11 @@ class GoldApiService {
     
     /// 获取K线数据（自动回退）
     func fetchKlines(product: ProductType, period: KlinePeriod, count: Int = 500) async throws -> [Kline] {
+        // 0. 东方财富现货（主源，全周期含历史分钟K/周K）
+        if let emResult = try? await fetchFromEastMoney(product: product, period: period, count: count) {
+            return emResult
+        }
+        
         // 1. 尝试代理服务器（只有配置了URL才走）
         if !API.proxyBase.isEmpty, let proxyResult = try? await fetchFromProxy(product: product, period: period, count: count) {
             return proxyResult
@@ -37,6 +49,116 @@ class GoldApiService {
         // 4. 模拟数据兜底
         let basePrice = product == .xau ? 4100.0 : 29.5
         return MockData.generateKlines(count: count, basePrice: basePrice)
+    }
+    
+    // MARK: - 东方财富现货K线（主源）
+    
+    private func fetchFromEastMoney(product: ProductType, period: KlinePeriod, count: Int) async throws -> [Kline] {
+        if period == .h4 {
+            // 东财无4小时K：取60分钟K后按时间窗口聚合
+            let hourly = try await fetchFromEastMoneyRaw(product: product, klt: "60", count: count * 4)
+            return aggregateToH4(hourly)
+        }
+        return try await fetchFromEastMoneyRaw(product: product, klt: mapEastMoneyPeriod(period), count: count)
+    }
+    
+    private func fetchFromEastMoneyRaw(product: ProductType, klt: String, count: Int) async throws -> [Kline] {
+        let secid = product == .xau ? "122.XAU" : "122.XAG"
+        var lastError: Error?
+        
+        for host in emKlineHosts {
+            let urlStr = "https://\(host)/api/qt/stock/kline/get?secid=\(secid)"
+                + "&fields1=f1,f2,f3&fields2=f51,f52,f53,f54,f55,f56"
+                + "&klt=\(klt)&fqt=1&end=20500101&lmt=\(count)"
+            guard let url = URL(string: urlStr) else {
+                lastError = APIError.invalidURL
+                continue
+            }
+            
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 10
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                            forHTTPHeaderField: "User-Agent")
+            request.setValue("https://quote.eastmoney.com/", forHTTPHeaderField: "Referer")
+            
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200 else {
+                    lastError = APIError.httpError
+                    continue
+                }
+                guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let d = json["data"] as? [String: Any],
+                      let klinesRaw = d["klines"] as? [String] else {
+                    lastError = APIError.noData
+                    continue
+                }
+                let klines = klinesRaw.compactMap { Self.parseEastMoneyKline($0) }
+                if !klines.isEmpty {
+                    return klines
+                }
+                lastError = APIError.noData
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+        
+        throw lastError ?? APIError.noData
+    }
+    
+    /// 东财K线行格式: "日期[,时间],开,收,高,低,量[,额]"
+    private static func parseEastMoneyKline(_ line: String) -> Kline? {
+        let parts = line.components(separatedBy: ",")
+        guard parts.count >= 6,
+              let open = Double(parts[1]), open > 0,
+              let close = Double(parts[2]), close > 0,
+              let high = Double(parts[3]), high > 0,
+              let low = Double(parts[4]), low > 0 else { return nil }
+        let volume = Double(parts[5]) ?? 0
+        guard let ts = Self.eastMoneyTimeToMillis(parts[0]) else { return nil }
+        return Kline(timestamp: ts, open: open, high: high, low: low, close: close, volume: volume)
+    }
+    
+    /// 东财时间字符串（北京时间）→ 毫秒时间戳；日K"2026-08-07"，分钟K"2026-08-07 14:30"
+    private static func eastMoneyTimeToMillis(_ timeStr: String) -> TimeInterval? {
+        let formatter = eastMoneyFormatter(timeStr.contains(":"))
+        guard let date = formatter.date(from: timeStr) else { return nil }
+        return date.timeIntervalSince1970 * 1000
+    }
+    
+    private static var dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+    
+    private static var minuteFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        f.dateFormat = "yyyy-MM-dd HH:mm"
+        return f
+    }()
+    
+    private static func eastMoneyFormatter(_ hasTime: Bool) -> DateFormatter {
+        hasTime ? minuteFormatter : dayFormatter
+    }
+    
+    /// 东财周期代码: 1/5/15/30/60分钟, 101日K, 102周K
+    private func mapEastMoneyPeriod(_ period: KlinePeriod) -> String {
+        switch period {
+        case .m1:  return "1"
+        case .m5:  return "5"
+        case .m15: return "15"
+        case .m30: return "30"
+        case .h1:  return "60"
+        case .h4:  return "60"   // 由fetchFromEastMoney聚合，不会走到这
+        case .d1:  return "101"
+        case .w1:  return "102"
+        }
     }
     
     // MARK: - 新浪财经（日K/周K）

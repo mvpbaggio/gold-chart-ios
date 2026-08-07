@@ -24,7 +24,7 @@ class ChartViewModel: ObservableObject {
     
     // 实时K线（最后一根K线随实时行情延伸）
     @Published var realtimeKlines: [Kline] = []
-    /// 历史K线数量（超出此范围的为实时延伸的K线，不修改雅虎数据）
+    /// 历史K线数量（超出此范围的为实时延伸的K线，不修改历史数据）
     private var historicalCount: Int = 0
     
     // 选中的指标
@@ -73,7 +73,7 @@ class ChartViewModel: ObservableObject {
             .sink { [weak self] connected in
                 self?.isRealTimeConnected = connected
                 if !connected {
-                    self?.debugText = "[等待] Sina连接中..."
+                    self?.debugText = "[等待] 实时行情连接中..."
                 }
             }
             .store(in: &cancellables)
