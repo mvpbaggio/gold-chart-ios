@@ -23,16 +23,23 @@ class IndicatorEngine {
     }
     
     // MARK: - 指数移动平均线 (EMA)
+    // 标准算法：种子 = 前 period 根收盘价的 SMA（国内行情软件口径）
     static func ema(_ data: [Kline], period: Int) -> [Double?] {
-        guard data.count >= 1 else { return [] }
+        guard data.count >= period, period > 0 else {
+            return Array(repeating: nil as Double?, count: data.count)
+        }
         var result: [Double?] = Array(repeating: nil, count: data.count)
         let multiplier = 2.0 / Double(period + 1)
         
-        // 第一个EMA用SMA
-        var emaValue: Double = data[0].close
-        result[0] = emaValue
+        // 种子 = 前 period 根 SMA
+        var sum: Double = 0
+        for i in 0..<period {
+            sum += data[i].close
+        }
+        var emaValue: Double = sum / Double(period)
+        result[period - 1] = emaValue
         
-        for i in 1..<data.count {
+        for i in period..<data.count {
             emaValue = (data[i].close - emaValue) * multiplier + emaValue
             result[i] = emaValue
         }
@@ -51,17 +58,26 @@ class IndicatorEngine {
             }
         }
         
-        // DEA = EMA of DIF
+        // DEA = EMA of DIF（种子 = 前 signal 根 DIF 的 SMA，标准算法）
         var dea: [Double?] = Array(repeating: nil, count: data.count)
-        var deaValue: Double?
-        for i in 0..<data.count {
-            guard let d = dif[i] else { continue }
-            if deaValue == nil {
-                deaValue = d
-            } else {
-                deaValue = (d - deaValue!) * (2.0 / Double(signal + 1)) + deaValue!
+        if data.count >= signal {
+            var difSum: Double = 0
+            var difCount = 0
+            for i in 0..<data.count {
+                guard let d = dif[i] else { continue }
+                difSum += d
+                difCount += 1
+                if difCount == signal {
+                    var deaValue = difSum / Double(signal)
+                    dea[i] = deaValue
+                    for j in (i + 1)..<data.count {
+                        guard let dj = dif[j] else { continue }
+                        deaValue = (dj - deaValue) * (2.0 / Double(signal + 1)) + deaValue
+                        dea[j] = deaValue
+                    }
+                    break
+                }
             }
-            dea[i] = deaValue
         }
         
         // Histogram = 2 * (DIF - DEA)

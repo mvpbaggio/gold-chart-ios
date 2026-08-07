@@ -60,10 +60,18 @@ struct API {
         UserDefaults.standard.set(url, forKey: "proxy_url")
     }
     
-    // A股：新浪财经
+    // A股搜索：新浪财经
     static let sinaSearch = "https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15&key="
+
+    // 实时行情：腾讯财经（金银 + 内盘）
+    static let tencentQuote = "https://qt.gtimg.cn/q="
+    // A股日K：腾讯财经
+    static let tencentKline = "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param="
+
+    // 实时行情备用：新浪财经（内盘期货 nf_AU0/nf_AG0）
     static let sinaQuote = "https://hq.sinajs.cn/list="
-    static let sinaHistory = "https://web.ifzq.gtimg.cn/appstock/app/day/query?"
+    // 外盘日K（COMEX金银）：新浪全球期货
+    static let sinaGlobalKline = "https://stock.finance.sina.com.cn/futures/api/openapi.php/GlobalFuturesService.getGlobalFuturesDailyKLine?symbol="
 }
 
 // MARK: - 其他常量

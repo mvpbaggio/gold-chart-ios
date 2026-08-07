@@ -19,6 +19,14 @@ enum ProductType: String, CaseIterable {
         }
     }
     
+    /// 新浪期货代码（外盘 COMEX）
+    var sinaSymbols: [String] {
+        switch self {
+        case .xau: return ["GC"]
+        case .xag: return ["SI"]
+        }
+    }
+    
     var displayName: String {
         switch self {
         case .xau: return "现货黄金"
