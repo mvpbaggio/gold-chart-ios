@@ -151,7 +151,7 @@ struct CandleChartContainer: UIViewRepresentable {
         let leftAxis = chart.leftAxis
         leftAxis.removeAllLimitLines()
         
-        let currentPrice = klines.last?.close ?? 0
+        let currentPrice = (klines.last?.close ?? 0) * displayFactor
         if currentPrice > 0 {
             let liveLl = ChartLimitLine(limit: currentPrice, label: "\(String(format: "%.2f", currentPrice))")
             liveLl.labelPosition = .rightTop
