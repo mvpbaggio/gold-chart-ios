@@ -257,8 +257,8 @@ class SignalEngine {
                 position = .none
             }
             
-            // 开仓信号
-            if score >= config.longThreshold {
+            // 开仓信号：只在状态转换时开仓（避免同一持仓周期内重复发信号 → 徽章爆炸）
+            if position != .long && score >= config.longThreshold {
                 // 反向持仓 → 先平仓（止盈逻辑2：出现反向信号即平仓）
                 if position == .short {
                     signals.append(SignalMarker(
@@ -288,7 +288,7 @@ class SignalEngine {
                 entryStopLoss = sl
                 entryIndex = i
                 
-            } else if score <= config.shortThreshold {
+            } else if position != .short && score <= config.shortThreshold {
                 // 反向持仓 → 先平仓
                 if position == .long {
                     signals.append(SignalMarker(

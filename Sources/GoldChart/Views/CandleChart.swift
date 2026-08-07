@@ -26,27 +26,33 @@ final class SignalBadgeOverlayView: UIView {
         let factor = vm.useCNY ? vm.currentRate / ChartViewModel.gramPerOunce : 1.0
         let transformer = chart.getTransformer(forAxis: .left)
         
-        // 偏移量与 signalDataSets 保持一致（徽章圆心 = 虚线端点）
-        let lows = klines.map { $0.low }
-        let highs = klines.map { $0.high }
-        let priceRange = (highs.max() ?? 1) - (lows.min() ?? 0)
-        let offset = max(priceRange * 0.01, (highs.max() ?? 1) * 0.002)
-        
         for sig in vm.signalMarkers where sig.type.isEntry {
             guard sig.candleIndex < klines.count else { continue }
             let idx = sig.candleIndex
-            // 多→最低点下方；空→最高点上方
-            let yValue: Double
+            // 多→最低点下方；空→最高点上方（偏移用固定像素 24pt，避免金价高位时偏移不可见）
+            let anchorValue: Double
             let color: UIColor
             if sig.type == .longOpen {
-                yValue = klines[idx].low * factor - offset
+                anchorValue = klines[idx].low * factor
                 color = UIColor(AppColors.red)
             } else {
-                yValue = klines[idx].high * factor + offset
+                anchorValue = klines[idx].high * factor
                 color = UIColor(AppColors.green)
             }
-            let pixel = transformer.pixelForValues(x: Double(idx), y: yValue)
-            drawBadge(ctx: ctx, center: pixel, color: color, text: sig.type.marker)
+            let anchor = transformer.pixelForValues(x: Double(idx), y: anchorValue)
+            let badgeCenter = CGPoint(x: anchor.x, y: sig.type == .longOpen ? anchor.y - 24 : anchor.y + 24)
+            
+            // 灰色垂直虚线：K线极值 → 徽章圆心
+            ctx.saveGState()
+            ctx.setStrokeColor(UIColor.gray.withAlphaComponent(0.6).cgColor)
+            ctx.setLineWidth(1)
+            ctx.setLineDash(phase: 0, lengths: [3, 3])
+            ctx.move(to: anchor)
+            ctx.addLine(to: badgeCenter)
+            ctx.strokePath()
+            ctx.restoreGState()
+            
+            drawBadge(ctx: ctx, center: badgeCenter, color: color, text: sig.type.marker)
         }
     }
     
@@ -157,10 +163,9 @@ struct CandleChartContainer: UIViewRepresentable {
             leftAxis.addLimitLine(liveLl)
         }
         
-        // 近2个信号的止损/止盈线
-        let recentSignals = viewModel.signalMarkers.suffix(2)
-        for signal in recentSignals {
-            guard let sl = signal.stopLoss, let st = signal.stopTarget else { continue }
+        // 最新1个信号的止损/止盈线（止损 rightTop / 止盈 rightBottom，避免标签重叠）
+        if let signal = viewModel.signalMarkers.last,
+           let sl = signal.stopLoss, let st = signal.stopTarget {
             let factor = displayFactor
             
             let slLl = ChartLimitLine(limit: sl * factor, label: "止损 \(String(format: "%.1f", sl * factor))")
@@ -172,7 +177,7 @@ struct CandleChartContainer: UIViewRepresentable {
             leftAxis.addLimitLine(slLl)
             
             let stLl = ChartLimitLine(limit: st * factor, label: "止盈 \(String(format: "%.1f", st * factor))")
-            stLl.labelPosition = .rightTop
+            stLl.labelPosition = .rightBottom
             stLl.lineWidth = 1
             stLl.lineDashLengths = [4, 4]
             stLl.lineColor = UIColor(AppColors.red)
@@ -249,70 +254,14 @@ struct CandleChartContainer: UIViewRepresentable {
         dataSet.valueTextColor = UIColor.clear
         dataSet.drawValuesEnabled = false
         
-        let data = CandleChartData(dataSets: [dataSet] + extraDataSets + signalDataSets)
+        let data = CandleChartData(dataSets: [dataSet] + extraDataSets)
         return data
     }
     
-    // MARK: - 信号连接线数据集（灰色虚线连极值；徽章由 SignalBadgeOverlayView 绘制）
+    // MARK: - 信号连接线（虚线+徽章全部由 SignalBadgeOverlayView 像素层绘制，此处不再生成数据集）
     /// 当前显示币种的换算系数（CNY模式: 汇率/31.1035, USD模式: 1）
     private var displayFactor: Double {
         viewModel.useCNY ? viewModel.currentRate / ChartViewModel.gramPerOunce : 1.0
-    }
-    
-    private var signalDataSets: [ChartDataSetProtocol] {
-        guard !viewModel.signalMarkers.isEmpty else { return [] }
-        let factor = displayFactor
-        
-        // 追风揽月风格：灰色垂直虚线连接信号徽章与K线极值点
-        let longSignals = viewModel.signalMarkers.filter { $0.type == .longOpen }
-        let shortSignals = viewModel.signalMarkers.filter { $0.type == .shortOpen }
-        
-        // 价格范围用于偏移量
-        let lows = klines.map { $0.low }
-        let highs = klines.map { $0.high }
-        let priceRange = (highs.max() ?? 1) - (lows.min() ?? 0)
-        let offset = max(priceRange * 0.01, (highs.max() ?? 1) * 0.002)  // 信号圈距极值距离
-        
-        var sets: [ChartDataSetProtocol] = []
-        
-        // 多头信号：虚线（圈位→K线最低点），每个信号单独 2 点避免相邻信号连成折线
-        for sig in longSignals {
-            let idx = sig.candleIndex
-            let lowY = (idx < klines.count ? klines[idx].low : sig.price) * factor
-            let connEntries = [
-                ChartDataEntry(x: Double(idx), y: lowY),
-                ChartDataEntry(x: Double(idx), y: lowY - offset)
-            ]
-            let conn = LineChartDataSet(entries: connEntries, label: "")
-            conn.setColor(UIColor.gray.withAlphaComponent(0.6))
-            conn.lineWidth = 0.8
-            conn.lineDashLengths = [3, 3]
-            conn.drawCirclesEnabled = false
-            conn.drawValuesEnabled = false
-            conn.axisDependency = .left
-            sets.append(conn)
-        }
-        
-        // 空头信号：虚线（圈位→K线最高点）
-        for sig in shortSignals {
-            let idx = sig.candleIndex
-            let highY = (idx < klines.count ? klines[idx].high : sig.price) * factor
-            let connEntries = [
-                ChartDataEntry(x: Double(idx), y: highY),
-                ChartDataEntry(x: Double(idx), y: highY + offset)
-            ]
-            let conn = LineChartDataSet(entries: connEntries, label: "")
-            conn.setColor(UIColor.gray.withAlphaComponent(0.6))
-            conn.lineWidth = 0.8
-            conn.lineDashLengths = [3, 3]
-            conn.drawCirclesEnabled = false
-            conn.drawValuesEnabled = false
-            conn.axisDependency = .left
-            sets.append(conn)
-        }
-        
-        // 追风揽月无独立平仓标记（多空交替=平仓+反手）
-        return sets
     }
     
     private var extraDataSets: [ChartDataSetProtocol] {
