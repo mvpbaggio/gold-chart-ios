@@ -36,8 +36,7 @@ class ChartViewModel: ObservableObject {
     @Published var showKDJ = false
     @Published var showBOLL = false
     @Published var showVolume = true
-    @Published var showSuperTrend = true
-    @Published var showOldMarkers = false  // 旧版信号三角/止损（默认关闭，看综合评分就够了）
+    @Published var showOldMarkers = false  // 旧版信号三角/止损（默认关闭，看追风揽月信号就够了）
     
     @Published var selectedIndicator: IndicatorType? = nil
     
@@ -48,11 +47,8 @@ class ChartViewModel: ObservableObject {
         case rsi = "RSI"
         case kdj = "KDJ"
         case boll = "BOLL"
-        case wr = "W%R"
-        case atr = "ATR"
         case obv = "OBV"
-        case ichimoku = "云图"
-        case supertrend = "SuperTrend"
+        case hurst = "Hurst"
         
         var displayName: String { self.rawValue }
     }
@@ -174,33 +170,14 @@ class ChartViewModel: ObservableObject {
     /// 实时更新复合评分（每次即时报价变化时重算）
     private func recalcComposite() {
         compositeSignal = SignalEngine.composite(realtimeKlines)
-        // 实时评分达到阈值时添加信号
-        guard let cs = compositeSignal, let last = realtimeKlines.last, realtimeKlines.count >= 60 else { return }
+        // 实时信号：达到阈值时添加/替换最后一根K线的信号
+        guard realtimeKlines.count >= 60 else { return }
+        let (marker, _) = SignalEngine.realtimeSignal(realtimeKlines)
         let currentMarkers = signalMarkers
-        // 如果最后一个信号是实时评分且同一根K线，替换它
-        var filtered = currentMarkers.filter { $0.source != "实时评分" || $0.candleIndex < realtimeKlines.count - 1 }
-        if cs.score >= 40 {
-            let sl = last.low
-            let range = last.close - sl
-            filtered.append(SignalMarker(
-                candleIndex: realtimeKlines.count - 1,
-                type: .longOpen, price: last.close,
-                stopLoss: sl, stopTarget: last.close + range,
-                strength: min(cs.score, 100),
-                source: "实时评分",
-                timestamp: last.timestamp
-            ))
-        } else if cs.score <= -40 {
-            let sl = last.high
-            let range = sl - last.close
-            filtered.append(SignalMarker(
-                candleIndex: realtimeKlines.count - 1,
-                type: .shortOpen, price: last.close,
-                stopLoss: sl, stopTarget: last.close - range,
-                strength: min(abs(cs.score), 100),
-                source: "实时评分",
-                timestamp: last.timestamp
-            ))
+        // 移除同一根K线上的实时信号，避免重复
+        var filtered = currentMarkers.filter { $0.source != "实时信号" || $0.candleIndex < realtimeKlines.count - 1 }
+        if let m = marker {
+            filtered.append(m)
         }
         signalMarkers = filtered
     }
@@ -273,45 +250,20 @@ class ChartViewModel: ObservableObject {
             klines = fetched
             realtimeKlines = fetched
             historicalCount = fetched.count
-            debugText = "[雅虎] \(fetched.count)根K线 OK"
+            debugText = "[数据] \(fetched.count)根K线 OK"
             if !fetched.isEmpty {
                 compositeSignal = SignalEngine.composite(fetched)
                 var markers = SignalEngine.perCandleSignals(fetched)
                 // 最新一根K线的实时信号
-                if let cs = compositeSignal, let last = fetched.last {
-                    if cs.score >= 40 {
-                        let sl = last.low
-                        let range = last.close - sl
-                        markers.append(SignalMarker(
-                            candleIndex: fetched.count - 1,
-                            type: .longOpen,
-                            price: last.close,
-                            stopLoss: sl,
-                            stopTarget: last.close + range,
-                            strength: min(cs.score, 100),
-                            source: "实时评分",
-                            timestamp: last.timestamp
-                        ))
-                    } else if cs.score <= -40 {
-                        let sl = last.high
-                        let range = sl - last.close
-                        markers.append(SignalMarker(
-                            candleIndex: fetched.count - 1,
-                            type: .shortOpen,
-                            price: last.close,
-                            stopLoss: sl,
-                            stopTarget: last.close - range,
-                            strength: min(abs(cs.score), 100),
-                            source: "实时评分",
-                            timestamp: last.timestamp
-                        ))
-                    }
+                let (marker, _) = SignalEngine.realtimeSignal(fetched)
+                if let m = marker {
+                    markers.append(m)
                 }
                 signalMarkers = markers
             }
         } catch {
             errorMessage = error.localizedDescription
-            debugText = "[降级] 雅虎不通! 用模拟数据. \(error.localizedDescription)"
+            debugText = "[降级] 数据源不通! 用模拟数据. \(error.localizedDescription)"
             let mock = MockData.generateKlines(count: 200)
             klines = mock
             realtimeKlines = mock
@@ -319,12 +271,9 @@ class ChartViewModel: ObservableObject {
             if !mock.isEmpty {
                 compositeSignal = SignalEngine.composite(mock)
                 var markers = SignalEngine.perCandleSignals(mock)
-                if let cs = compositeSignal, let last = mock.last {
-                    if cs.score >= 40 {
-                        markers.append(SignalMarker(candleIndex: mock.count-1, type: .longOpen, price: last.close, stopLoss: last.low, stopTarget: last.close + (last.close - last.low), strength: min(cs.score, 100), source: "实时评分", timestamp: last.timestamp))
-                    } else if cs.score <= -40 {
-                        markers.append(SignalMarker(candleIndex: mock.count-1, type: .shortOpen, price: last.close, stopLoss: last.high, stopTarget: last.close - (last.high - last.close), strength: min(abs(cs.score), 100), source: "实时评分", timestamp: last.timestamp))
-                    }
+                let (marker, _) = SignalEngine.realtimeSignal(mock)
+                if let m = marker {
+                    markers.append(m)
                 }
                 signalMarkers = markers
             }
@@ -387,24 +336,12 @@ class ChartViewModel: ObservableObject {
         IndicatorEngine.bollinger(realtimeKlines)
     }
     
-    func computeWR() -> [Double?] {
-        IndicatorEngine.williamsR(realtimeKlines)
-    }
-    
     func computeOBV() -> [Double?] {
         IndicatorEngine.obv(realtimeKlines)
     }
     
-    func computeATR() -> [Double?] {
-        IndicatorEngine.atr(realtimeKlines)
-    }
-    
-    func computeIchimoku() -> IchimokuResult {
-        IndicatorEngine.ichimoku(realtimeKlines)
-    }
-    
-    func computeSuperTrend(period: Int = 10, multiplier: Double = 3.0) -> SuperTrendResult {
-        IndicatorEngine.superTrend(realtimeKlines, period: period, multiplier: multiplier)
+    func computeHurst() -> Double {
+        IndicatorEngine.hurst(realtimeKlines)
     }
     
     // MARK: - 当前价格信息（原始USD价）

@@ -468,18 +468,6 @@ struct ChartView: View {
                         .cornerRadius(4)
                 }
                 
-                Button(action: {
-                    viewModel.showSuperTrend.toggle()
-                }) {
-                    Text("SuperTrend")
-                        .font(.system(size: 11))
-                        .foregroundColor(viewModel.showSuperTrend ? AppColors.gold : AppColors.textSecondary)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(viewModel.showSuperTrend ? AppColors.gold.opacity(0.12) : AppColors.cardBackground)
-                        .cornerRadius(4)
-                }
-                
                 ForEach(ChartViewModel.IndicatorType.allCases, id: \.rawValue) { indicator in
                     Button(action: {
                         viewModel.selectedIndicator = viewModel.selectedIndicator == indicator ? nil : indicator
@@ -509,12 +497,22 @@ struct ChartView: View {
             LineIndicatorChartView(values: viewModel.computeRSI(), name: "RSI", overbought: 70, oversold: 30, color: AppColors.indicatorRSI)
         case .kdj:
             KDJChartView(kdj: viewModel.computeKDJ())
-        case .wr:
-            LineIndicatorChartView(values: viewModel.computeWR(), name: "W%R", overbought: -20, oversold: -80, color: AppColors.indicatorMACD)
         case .obv:
             LineIndicatorChartView(values: viewModel.computeOBV(), name: "OBV", overbought: nil, oversold: nil, color: AppColors.indicatorVolume)
-        case .atr:
-            LineIndicatorChartView(values: viewModel.computeATR(), name: "ATR", overbought: nil, oversold: nil, color: AppColors.green)
+        case .hurst:
+            let h = viewModel.computeHurst()
+            HStack(spacing: 4) {
+                Text("Hurst")
+                    .font(.system(size: 11))
+                    .foregroundColor(AppColors.textTertiary)
+                Text(String(format: "%.3f", h))
+                    .font(.system(size: 12, weight: .bold))
+                    .foregroundColor(h > 0.5 ? AppColors.red : h < 0.5 ? AppColors.green : AppColors.textSecondary)
+                Text(h > 0.5 ? "趋势延续" : h < 0.5 ? "均值回归" : "随机游走")
+                    .font(.system(size: 10))
+                    .foregroundColor(AppColors.textTertiary)
+            }
+            .padding(.horizontal, 12)
         default:
             EmptyView()
         }

@@ -1,9 +1,12 @@
 import Foundation
 
-// MARK: - 技术指标引擎
+// MARK: - 技术指标引擎（全部按技能标准算法：china-technical-analysis + aistockresearcher）
+// 指标集：MA(5/10/20/60/120/250) / EMA(12/26) / MACD(12,26,9) / RSI(14) / KDJ(9,3,3)
+//        / BOLL(20,2) / ADX / OBV / Hurst指数
+// 已删除 App 独有指标：W%R / ATR / CCI / MFI / SuperTrend / Ichimoku
 class IndicatorEngine {
     
-    // MARK: - 移动平均线 (MA)
+    // MARK: - 移动平均线 (MA / SMA)
     static func ma(_ data: [Kline], period: Int) -> [Double?] {
         guard data.count >= period else {
             return Array(repeating: nil as Double?, count: data.count)
@@ -23,7 +26,7 @@ class IndicatorEngine {
     }
     
     // MARK: - 指数移动平均线 (EMA)
-    // 标准算法：种子 = 前 period 根收盘价的 SMA（国内行情软件口径）
+    // 标准算法：种子 = 前 period 根收盘价的 SMA（技能同款）
     static func ema(_ data: [Kline], period: Int) -> [Double?] {
         guard data.count >= period, period > 0 else {
             return Array(repeating: nil as Double?, count: data.count)
@@ -31,7 +34,6 @@ class IndicatorEngine {
         var result: [Double?] = Array(repeating: nil, count: data.count)
         let multiplier = 2.0 / Double(period + 1)
         
-        // 种子 = 前 period 根 SMA
         var sum: Double = 0
         for i in 0..<period {
             sum += data[i].close
@@ -46,7 +48,8 @@ class IndicatorEngine {
         return result
     }
     
-    // MARK: - MACD
+    // MARK: - MACD (12,26,9)
+    // DIF = EMA12 - EMA26；DEA = EMA(DIF,9)；柱 = 2×(DIF-DEA)
     static func macd(_ data: [Kline], fast: Int = 12, slow: Int = 26, signal: Int = 9) -> MACDResult {
         let fastEMA = ema(data, period: fast)
         let slowEMA = ema(data, period: slow)
@@ -58,7 +61,7 @@ class IndicatorEngine {
             }
         }
         
-        // DEA = EMA of DIF（种子 = 前 signal 根 DIF 的 SMA，标准算法）
+        // DEA = EMA of DIF（种子 = 前 signal 根 DIF 的 SMA）
         var dea: [Double?] = Array(repeating: nil, count: data.count)
         if data.count >= signal {
             var difSum: Double = 0
@@ -91,7 +94,7 @@ class IndicatorEngine {
         return MACDResult(dif: dif, dea: dea, histogram: histogram)
     }
     
-    // MARK: - RSI
+    // MARK: - RSI (14)
     static func rsi(_ data: [Kline], period: Int = 14) -> [Double?] {
         guard data.count > period else {
             return Array(repeating: nil, count: data.count)
@@ -121,7 +124,7 @@ class IndicatorEngine {
         return result
     }
     
-    // MARK: - KDJ
+    // MARK: - KDJ (9,3,3)
     static func kdj(_ data: [Kline], period: Int = 9) -> KDJResult {
         guard data.count >= period else {
             return KDJResult(k: [], d: [], j: [])
@@ -155,7 +158,7 @@ class IndicatorEngine {
         return KDJResult(k: kValues, d: dValues, j: jValues)
     }
     
-    // MARK: - BOLL
+    // MARK: - BOLL (20,2)
     static func bollinger(_ data: [Kline], period: Int = 20, multiplier: Double = 2.0) -> BollingerResult {
         let middle = ma(data, period: period)
         
@@ -179,96 +182,38 @@ class IndicatorEngine {
         return BollingerResult(upper: upper, middle: middle, lower: lower)
     }
     
-    // MARK: - W%R (威廉指标)
-    static func williamsR(_ data: [Kline], period: Int = 14) -> [Double?] {
-        guard data.count >= period else { return Array(repeating: nil, count: data.count) }
-        var result: [Double?] = Array(repeating: nil, count: data.count)
-        
-        for i in (period - 1)..<data.count {
-            let start = i - period + 1
-            let highest = data[start...i].max(by: { $0.high < $1.high })?.high ?? data[i].high
-            let lowest = data[start...i].min(by: { $0.low < $1.low })?.low ?? data[i].low
-            result[i] = (highest - lowest) == 0 ? -50 : (highest - data[i].close) / (highest - lowest) * -100
-        }
-        return result
+    // MARK: - 布林带位置 (bb_position 0-100)
+    // 当前价在布林带中的位置：0=下轨，100=上轨
+    static func bollingerPosition(_ data: [Kline], period: Int = 20) -> Double? {
+        guard data.count >= period else { return nil }
+        let boll = bollinger(data, period: period)
+        guard let close = data.last?.close,
+              let upper = boll.upper.compactMap({ $0 }).last,
+              let lower = boll.lower.compactMap({ $0 }).last,
+              upper > lower else { return nil }
+        return (close - lower) / (upper - lower) * 100
     }
     
-    // MARK: - ATR (平均真实波幅)
-    static func atr(_ data: [Kline], period: Int = 14) -> [Double?] {
-        guard data.count > 1 else { return Array(repeating: nil, count: data.count) }
-        var result: [Double?] = Array(repeating: nil, count: data.count)
+    // MARK: - 均线状态（多头排列/空头排列/混乱）
+    // 多头排列: MA5 > MA10 > MA20 > MA60；空头排列: MA5 < MA10 < MA20 < MA60
+    static func maArrangement(_ data: [Kline]) -> String {
+        guard data.count >= 60 else { return "混乱" }
+        let ma5 = ma(data, period: 5).compactMap { $0 }.last
+        let ma10 = ma(data, period: 10).compactMap { $0 }.last
+        let ma20 = ma(data, period: 20).compactMap { $0 }.last
+        let ma60 = ma(data, period: 60).compactMap { $0 }.last
         
-        var trValues: [Double] = []
-        for i in 1..<data.count {
-            let highLow = data[i].high - data[i].low
-            let highClose = abs(data[i].high - data[i-1].close)
-            let lowClose = abs(data[i].low - data[i-1].close)
-            trValues.append(max(highLow, highClose, lowClose))
+        guard let m5 = ma5, let m10 = ma10, let m20 = ma20, let m60 = ma60 else {
+            return "混乱"
         }
         
-        guard trValues.count >= period else { return result }
-        
-        var atrValue = trValues[0..<period].reduce(0, +) / Double(period)
-        result[period] = atrValue
-        
-        for i in (period + 1)..<data.count {
-            atrValue = (atrValue * Double(period - 1) + trValues[i-1]) / Double(period)
-            result[i] = atrValue
+        if m5 > m10 && m10 > m20 && m20 > m60 {
+            return "多头排列"
         }
-        
-        return result
-    }
-    
-    // MARK: - CCI (商品通道指数)
-    static func cci(_ data: [Kline], period: Int = 20) -> [Double?] {
-        guard data.count >= period else { return Array(repeating: nil, count: data.count) }
-        var result: [Double?] = Array(repeating: nil, count: data.count)
-        
-        for i in (period - 1)..<data.count {
-            let start = i - period + 1
-            let typicalPrices = data[start...i].map { ($0.high + $0.low + $0.close) / 3.0 }
-            let meanTP = typicalPrices.reduce(0, +) / Double(period)
-            let meanDev = typicalPrices.reduce(0) { $0 + abs($1 - meanTP) } / Double(period)
-            let tp = (data[i].high + data[i].low + data[i].close) / 3.0
-            result[i] = meanDev == 0 ? 0 : (tp - meanTP) / (0.015 * meanDev)
+        if m5 < m10 && m10 < m20 && m20 < m60 {
+            return "空头排列"
         }
-        return result
-    }
-    
-    // MARK: - MFI (资金流向指数)
-    static func mfi(_ data: [Kline], period: Int = 14) -> [Double?] {
-        guard data.count > period else { return Array(repeating: nil, count: data.count) }
-        var result: [Double?] = Array(repeating: nil, count: data.count)
-        var rawFlows: [Double] = []
-        var positiveFlowFlag: [Bool] = []
-        
-        for i in 0..<data.count {
-            let tp = (data[i].high + data[i].low + data[i].close) / 3.0
-            let rawFlow = tp * data[i].volume
-            rawFlows.append(rawFlow)
-            
-            if i > 0 {
-                let prevTP = (data[i-1].high + data[i-1].low + data[i-1].close) / 3.0
-                positiveFlowFlag.append(tp >= prevTP)
-            }
-        }
-        
-        guard rawFlows.count > period, positiveFlowFlag.count >= period else { return result }
-        
-        for i in period..<data.count {
-            var posFlow: Double = 0
-            var negFlow: Double = 0
-            for j in (i - period)..<i {
-                if positiveFlowFlag[j] {
-                    posFlow += rawFlows[j]
-                } else {
-                    negFlow += rawFlows[j]
-                }
-            }
-            let mfr = negFlow == 0 ? 100 : posFlow / negFlow
-            result[i] = 100 - (100 / (1 + mfr))
-        }
-        return result
+        return "混乱"
     }
     
     // MARK: - DI (方向指标) — 供ADX使用
@@ -364,105 +309,73 @@ class IndicatorEngine {
         return result
     }
     
-    // MARK: - SuperTrend
-    static func superTrend(_ data: [Kline], period: Int = 10, multiplier: Double = 3.0) -> SuperTrendResult {
-        let n = data.count
-        var result: [Double?] = Array(repeating: nil, count: n)
-        var direction: [Int] = Array(repeating: 0, count: n)
+    // MARK: - Hurst 指数（R/S 分析，技能 aistockresearcher 同款）
+    // H < 0.5: 均值回归；H ≈ 0.5: 随机游走；H > 0.5: 趋势延续
+    static func hurst(_ data: [Kline], lookback: Int = 100) -> Double {
+        guard data.count >= 2 else { return 0.5 }
         
-        let atrValues = atr(data, period: period)
-        guard n > period else { return SuperTrendResult(supertrend: result, direction: direction) }
-        
-        var upperBand: [Double?] = Array(repeating: nil, count: n)
-        var lowerBand: [Double?] = Array(repeating: nil, count: n)
-        
-        for i in 0..<n {
-            guard let atr = atrValues[i] else { continue }
-            let hl2 = (data[i].high + data[i].low) / 2.0
-            upperBand[i] = hl2 + multiplier * atr
-            lowerBand[i] = hl2 - multiplier * atr
+        var returns: [Double] = []
+        for i in 1..<data.count {
+            let prev = data[i-1].close
+            guard prev != 0 else { continue }
+            returns.append((data[i].close - prev) / prev)
         }
         
-        var finalUpperBand: [Double?] = Array(repeating: nil, count: n)
-        var finalLowerBand: [Double?] = Array(repeating: nil, count: n)
+        if returns.count < lookback {
+            // 直接用 min 限制窗口
+        }
+        let n = min(lookback, returns.count)
+        guard n >= 10 else { return 0.5 }
         
-        for i in period..<n {
-            if i == period {
-                finalUpperBand[i] = upperBand[i]
-                finalLowerBand[i] = lowerBand[i]
-            } else {
-                if let ub = upperBand[i], let pub = finalUpperBand[i-1], let prevClose = data[i-1].close as Double? {
-                    finalUpperBand[i] = ub < pub || prevClose > pub ? ub : pub
-                } else {
-                    finalUpperBand[i] = upperBand[i]
+        let dataArr = Array(returns.suffix(n))
+        
+        func rangeOverStd(_ window: Int) -> Double {
+            guard window <= dataArr.count, window >= 2 else { return 1 }
+            var ranges: [Double] = []
+            var i = 0
+            while i < dataArr.count {
+                let end = min(i + window, dataArr.count)
+                let sub = Array(dataArr[i..<end])
+                i = end
+                if sub.count < 2 { continue }
+                let mean = sub.reduce(0, +) / Double(sub.count)
+                var cumsum: [Double] = [0]
+                for v in sub {
+                    cumsum.append(cumsum[cumsum.count - 1] + v - mean)
                 }
-                if let lb = lowerBand[i], let plb = finalLowerBand[i-1], let prevClose = data[i-1].close as Double? {
-                    finalLowerBand[i] = lb > plb || prevClose < plb ? lb : plb
-                } else {
-                    finalLowerBand[i] = lowerBand[i]
-                }
+                let r = (cumsum.max() ?? 0) - (cumsum.min() ?? 0)
+                let variance = sub.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(sub.count)
+                let s = sqrt(variance)
+                ranges.append(s > 0 ? r / s : 1)
             }
-            
-            if i == period {
-                direction[i] = data[i].close <= (finalUpperBand[i] ?? 0) ? -1 : 1
-            } else {
-                if let fub = finalUpperBand[i], let flb = finalLowerBand[i] {
-                    if data[i].close <= fub && direction[i-1] == 1 {
-                        direction[i] = -1
-                    } else if data[i].close >= flb && direction[i-1] == -1 {
-                        direction[i] = 1
-                    } else {
-                        direction[i] = direction[i-1]
-                    }
-                } else {
-                    direction[i] = direction[i-1]
-                }
-            }
-            
-            result[i] = direction[i] == 1 ? finalLowerBand[i] : finalUpperBand[i]
+            return ranges.isEmpty ? 1 : ranges.reduce(0, +) / Double(ranges.count)
         }
         
-        return SuperTrendResult(supertrend: result, direction: direction)
-    }
-    
-    // MARK: - 一目均衡表 (云图)
-    static func ichimoku(_ data: [Kline]) -> IchimokuResult {
-        let n = data.count
+        var logN: [Double] = []
+        var logRS: [Double] = []
         
-        var tenkan: [Double?] = Array(repeating: nil, count: n)
-        var kijun: [Double?] = Array(repeating: nil, count: n)
-        var senkouA: [Double?] = Array(repeating: nil, count: n)
-        var senkouB: [Double?] = Array(repeating: nil, count: n)
-        var chikou: [Double?] = Array(repeating: nil, count: n)
-        
-        for i in 8..<n {
-            let h1 = data[i-8...i].max(by: { $0.high < $1.high })?.high ?? data[i].high
-            let l1 = data[i-8...i].min(by: { $0.low < $1.low })?.low ?? data[i].low
-            tenkan[i] = (h1 + l1) / 2
-        }
-        
-        for i in 25..<n {
-            let h2 = data[i-25...i].max(by: { $0.high < $1.high })?.high ?? data[i].high
-            let l2 = data[i-25...i].min(by: { $0.low < $1.low })?.low ?? data[i].low
-            kijun[i] = (h2 + l2) / 2
-        }
-        
-        for i in 25..<n {
-            if let t = tenkan[i], let k = kijun[i] {
-                senkouA[i] = (t + k) / 2
+        for size in [5, 10, 20, 50] where size <= dataArr.count {
+            let rs = rangeOverStd(size)
+            if rs > 0 {
+                logN.append(log(Double(size)))
+                logRS.append(log(rs))
             }
         }
         
-        for i in 51..<n {
-            let h3 = data[i-51...i].max(by: { $0.high < $1.high })?.high ?? data[i].high
-            let l3 = data[i-51...i].min(by: { $0.low < $1.low })?.low ?? data[i].low
-            senkouB[i] = (h3 + l3) / 2
+        guard logN.count >= 2 else { return 0.5 }
+        
+        let nMean = logN.reduce(0, +) / Double(logN.count)
+        let rsMean = logRS.reduce(0, +) / Double(logRS.count)
+        
+        var numerator = 0.0
+        var denominator = 0.0
+        for i in 0..<logN.count {
+            numerator += (logN[i] - nMean) * (logRS[i] - rsMean)
+            denominator += (logN[i] - nMean) * (logN[i] - nMean)
         }
         
-        for i in 0..<(n - 25) {
-            chikou[i + 25] = data[i].close
-        }
-        
-        return IchimokuResult(tenkan: tenkan, kijun: kijun, senkouA: senkouA, senkouB: senkouB, chikou: chikou)
+        guard denominator > 0 else { return 0.5 }
+        let h = numerator / denominator
+        return max(0, min(1, h))
     }
 }

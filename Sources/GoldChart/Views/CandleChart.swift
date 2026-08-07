@@ -155,12 +155,11 @@ struct CandleChartContainer: UIViewRepresentable {
         guard !viewModel.signalMarkers.isEmpty else { return [] }
         let factor = displayFactor
         
-        // 多头信号（三角向上）
+        // 追风揽月风格：多头信号红圈「多」，空头信号绿圈「空」
         let longEntries = viewModel.signalMarkers
             .filter { $0.type == .longOpen }
             .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
         
-        // 空头信号（三角向下）
         let shortEntries = viewModel.signalMarkers
             .filter { $0.type == .shortOpen }
             .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
@@ -168,26 +167,60 @@ struct CandleChartContainer: UIViewRepresentable {
         var sets: [ChartDataSetProtocol] = []
         
         if !longEntries.isEmpty {
-            let s = ScatterChartDataSet(entries: longEntries, label: "做多")
-            s.setScatterShape(.triangle)
+            let s = ScatterChartDataSet(entries: longEntries, label: "多")
+            s.setScatterShape(.circle)
             s.setColor(UIColor(AppColors.red))
-            s.scatterShapeSize = 14
-            s.drawValuesEnabled = false
+            s.scatterShapeSize = 22
+            s.drawValuesEnabled = true
+            s.valueFormatter = SignalValueFormatter(text: "多")
+            s.valueTextColor = UIColor(AppColors.red)
+            s.valueFont = UIFont.boldSystemFont(ofSize: 10)
             s.axisDependency = .left
             sets.append(s)
         }
         
         if !shortEntries.isEmpty {
-            let s = ScatterChartDataSet(entries: shortEntries, label: "做空")
-            s.setScatterShape(.chevronDown)
+            let s = ScatterChartDataSet(entries: shortEntries, label: "空")
+            s.setScatterShape(.circle)
             s.setColor(UIColor(AppColors.green))
-            s.scatterShapeSize = 14
+            s.scatterShapeSize = 22
+            s.drawValuesEnabled = true
+            s.valueFormatter = SignalValueFormatter(text: "空")
+            s.valueTextColor = UIColor(AppColors.green)
+            s.valueFont = UIFont.boldSystemFont(ofSize: 10)
+            s.axisDependency = .left
+            sets.append(s)
+        }
+        
+        // 平仓信号：小号圆点（灰色描边）
+        let closeEntries = viewModel.signalMarkers
+            .filter { $0.type == .longClose || $0.type == .shortClose }
+            .map { ChartDataEntry(x: Double($0.candleIndex), y: $0.price * factor) }
+        
+        if !closeEntries.isEmpty {
+            let s = ScatterChartDataSet(entries: closeEntries, label: "平仓")
+            s.setScatterShape(.circle)
+            s.setColor(UIColor(AppColors.textTertiary))
+            s.scatterShapeSize = 12
             s.drawValuesEnabled = false
             s.axisDependency = .left
             sets.append(s)
         }
         
         return sets
+    }
+    
+    // MARK: - 信号文字 Formatter（图上显示「多」/「空」）
+    private class SignalValueFormatter: ValueFormatter {
+        let text: String
+        init(text: String) { self.text = text }
+        
+        func stringForValue(_ value: Double,
+                            entry: ChartDataEntry,
+                            dataSetIndex: Int,
+                            viewPortHandler: ViewPortHandler?) -> String {
+            return text
+        }
     }
     
     private var extraDataSets: [ChartDataSetProtocol] {
@@ -211,16 +244,6 @@ struct CandleChartContainer: UIViewRepresentable {
             sets.append(createLineDataSet(values: mapOpt(boll.upper), clr: AppColors.textTertiary, label: "UP"))
             sets.append(createLineDataSet(values: mapOpt(boll.middle), clr: AppColors.gold, label: "MID"))
             sets.append(createLineDataSet(values: mapOpt(boll.lower), clr: AppColors.textTertiary, label: "LOW"))
-        }
-        
-        if viewModel.showSuperTrend {
-            let st = viewModel.computeSuperTrend()
-            let st10 = st.supertrend
-            // SuperTrend with factor
-            let stFactored: [Double?] = st10.map { $0.map { v in v * factor } }
-            let stSet = createLineDataSet(values: stFactored, clr: AppColors.indicatorSuperTrend, label: "ST10")
-            stSet.lineWidth = 1.5
-            sets.append(stSet)
         }
         
         return sets
