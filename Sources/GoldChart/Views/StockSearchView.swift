@@ -180,8 +180,10 @@ struct StockMiniChart: UIViewRepresentable {
         let chart = CandleStickChartView()
         chart.backgroundColor = UIColor(AppColors.background)
         chart.legend.enabled = false
-        chart.doubleTapToZoomEnabled = false
+        chart.doubleTapToZoomEnabled = true
         chart.pinchZoomEnabled = true
+        chart.scaleXEnabled = true
+        chart.scaleYEnabled = true
         chart.drawGridBackgroundEnabled = false
         chart.borderColor = UIColor(AppColors.cardBorder)
         chart.borderLineWidth = 0.5
@@ -190,23 +192,46 @@ struct StockMiniChart: UIViewRepresentable {
         let xAxis = chart.xAxis
         xAxis.labelPosition = .bottom
         xAxis.labelTextColor = UIColor(AppColors.textTertiary)
-        xAxis.gridColor = UIColor(AppColors.cardBorder)
+        xAxis.gridColor = UIColor(hex: "F2F2F7")   // 同花顺浅灰网格
         xAxis.setLabelCount(4, force: false)
+        xAxis.avoidFirstLastClippingEnabled = true
+        xAxis.granularity = 1
         
         let leftAxis = chart.leftAxis
         leftAxis.labelTextColor = UIColor(AppColors.textTertiary)
-        leftAxis.gridColor = UIColor(AppColors.cardBorder)
+        leftAxis.gridColor = UIColor(hex: "F2F2F7")
+        leftAxis.labelPosition = .outsideChart
         
         let rightAxis = chart.rightAxis
         rightAxis.enabled = false
         
         chart.data = createData()
+        updateLimitLines(chart)
         return chart
     }
     
     func updateUIView(_ uiView: CandleStickChartView, context: Context) {
+        // 保存缩放矩阵 → 重建数据 → 恢复缩放（避免 setData 重置用户缩放）
+        let savedMatrix = uiView.viewPortHandler.touchMatrix
         uiView.data = createData()
+        uiView.viewPortHandler.refresh(newMatrix: savedMatrix, chart: uiView, invalidate: false)
+        updateLimitLines(uiView)
         uiView.notifyDataSetChanged()
+    }
+    
+    private func updateLimitLines(_ chart: CandleStickChartView) {
+        let leftAxis = chart.leftAxis
+        leftAxis.removeAllLimitLines()
+        if let last = klines.last {
+            let ll = ChartLimitLine(limit: last.close, label: String(format: "%.2f", last.close))
+            ll.labelPosition = .rightTop
+            ll.lineWidth = 1
+            ll.lineDashLengths = [4, 3]   // 红虚线现价线（同花顺）
+            ll.lineColor = UIColor(AppColors.red)
+            ll.valueTextColor = UIColor(AppColors.red)
+            ll.valueFont = UIFont.boldSystemFont(ofSize: 10)
+            leftAxis.addLimitLine(ll)
+        }
     }
     
     private func createData() -> CandleChartData {
@@ -214,14 +239,34 @@ struct StockMiniChart: UIViewRepresentable {
             CandleChartDataEntry(x: Double(i), shadowH: k.high, shadowL: k.low, open: k.open, close: k.close)
         }
         let set = CandleChartDataSet(entries: entries, label: "")
+        set.axisDependency = .left
         set.shadowColorSameAsCandle = true
+        set.shadowWidth = 1.0
         set.decreasingColor = UIColor(AppColors.green)
-        set.decreasingFilled = true
+        set.decreasingFilled = true        // 阴线（跌）绿实心（同花顺）
         set.increasingColor = UIColor(AppColors.red)
-        set.increasingFilled = true
+        set.increasingFilled = false       // 阳线（涨）红空心（同花顺）
         set.neutralColor = UIColor(AppColors.textSecondary)
         set.drawValuesEnabled = false
         
-        return CandleChartData(dataSets: [set])
+        // 3均线：MA5灰 / MA10橙黄 / MA20淡紫
+        var sets: [ChartDataSetProtocol] = [set]
+        let maConfigs: [(Int, Color)] = [(5, AppColors.indicatorMA), (10, AppColors.indicatorEMA), (20, AppColors.indicatorMA20)]
+        for (period, clr) in maConfigs {
+            let ma = IndicatorEngine.ma(klines, period: period)
+            let maEntries: [ChartDataEntry] = ma.enumerated().compactMap { (i, v) in
+                guard let v = v else { return nil }
+                return ChartDataEntry(x: Double(i), y: v)
+            }
+            let maSet = LineChartDataSet(entries: maEntries, label: "MA\(period)")
+            maSet.colors = [UIColor(clr)]
+            maSet.lineWidth = 0.8
+            maSet.drawCirclesEnabled = false
+            maSet.drawValuesEnabled = false
+            maSet.axisDependency = .left
+            sets.append(maSet)
+        }
+        
+        return CandleChartData(dataSets: sets)
     }
 }

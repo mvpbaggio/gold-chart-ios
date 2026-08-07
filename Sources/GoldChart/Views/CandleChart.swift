@@ -1,26 +1,133 @@
 import SwiftUI
 import DGCharts
 
+// MARK: - 信号徽章叠加层（口袋贵金属式：独立图层绘制，缩放/平移跟随重绘）
+@available(iOS 14.0, *)
+final class SignalBadgeOverlayView: UIView {
+    private weak var chart: CandleStickChartView?
+    var viewModel: ChartViewModel?
+    var klines: [Kline] = []
+    
+    init(chart: CandleStickChartView) {
+        self.chart = chart
+        super.init(frame: chart.bounds)
+        self.isUserInteractionEnabled = false   // 手势穿透给图表
+        self.backgroundColor = .clear
+        self.isOpaque = false
+        self.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+    }
+    
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    
+    override func draw(_ rect: CGRect) {
+        guard let chart = chart, let vm = viewModel, !klines.isEmpty else { return }
+        guard let ctx = UIGraphicsGetCurrentContext() else { return }
+        
+        let factor = vm.useCNY ? vm.currentRate / ChartViewModel.gramPerOunce : 1.0
+        let transformer = chart.getTransformer(forAxis: .left)
+        
+        // 偏移量与 signalDataSets 保持一致（徽章圆心 = 虚线端点）
+        let lows = klines.map { $0.low }
+        let highs = klines.map { $0.high }
+        let priceRange = (highs.max() ?? 1) - (lows.min() ?? 0)
+        let offset = max(priceRange * 0.01, (highs.max() ?? 1) * 0.002)
+        
+        for sig in vm.signalMarkers where sig.type.isEntry {
+            guard sig.candleIndex < klines.count else { continue }
+            let idx = sig.candleIndex
+            // 多→最低点下方；空→最高点上方
+            let yValue: Double
+            let color: UIColor
+            if sig.type == .longOpen {
+                yValue = klines[idx].low * factor - offset
+                color = UIColor(AppColors.red)
+            } else {
+                yValue = klines[idx].high * factor + offset
+                color = UIColor(AppColors.green)
+            }
+            let pixel = transformer.pixelForValues(x: Double(idx), y: yValue)
+            drawBadge(ctx: ctx, center: pixel, color: color, text: sig.type.marker)
+        }
+    }
+    
+    private func drawBadge(ctx: CGContext, center: CGPoint, color: UIColor, text: String) {
+        let radius: CGFloat = 13
+        // 白底
+        ctx.setFillColor(UIColor.white.cgColor)
+        ctx.fillEllipse(in: CGRect(x: center.x - radius, y: center.y - radius,
+                                   width: radius * 2, height: radius * 2))
+        // 描边
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setLineWidth(2)
+        ctx.strokeEllipse(in: CGRect(x: center.x - radius, y: center.y - radius,
+                                     width: radius * 2, height: radius * 2))
+        // 居中文字
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: 13),
+            .foregroundColor: color
+        ]
+        let str = text as NSString
+        let size = str.size(withAttributes: attrs)
+        str.draw(at: CGPoint(x: center.x - size.width / 2, y: center.y - size.height / 2),
+                 withAttributes: attrs)
+    }
+}
+
 // MARK: - K线图容器（UIKit桥接）
 @available(iOS 14.0, *)
 struct CandleChartContainer: UIViewRepresentable {
     let klines: [Kline]
     let viewModel: ChartViewModel
     
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
+    
     func makeUIView(context: Context) -> CandleStickChartView {
         let chart = CandleStickChartView()
         configureChart(chart, context: context)
         chart.data = createChartData()
         chart.marker = SignalMarkerView(viewModel: viewModel)
+        chart.delegate = context.coordinator
+        
+        // 信号徽章叠加层（口袋式独立图层）
+        let overlay = SignalBadgeOverlayView(chart: chart)
+        overlay.viewModel = viewModel
+        overlay.klines = klines
+        chart.addSubview(overlay)
+        context.coordinator.overlay = overlay
+        overlay.frame = chart.bounds
+        
         return chart
     }
     
     func updateUIView(_ uiView: CandleStickChartView, context: Context) {
+        // 保存缩放矩阵 → 重建数据 → 恢复缩放（避免 setData 的 fitScreen 重置用户缩放）
+        let savedMatrix = uiView.viewPortHandler.touchMatrix
         uiView.data = createChartData()
+        uiView.viewPortHandler.refresh(newMatrix: savedMatrix, chart: uiView, invalidate: false)
         uiView.marker = SignalMarkerView(viewModel: viewModel)
+        // 更新徽章层数据并重绘
+        context.coordinator.overlay?.viewModel = viewModel
+        context.coordinator.overlay?.klines = klines
+        context.coordinator.overlay?.frame = uiView.bounds
+        context.coordinator.overlay?.setNeedsDisplay()
         // 每帧刷新坐标轴（支持动态K线延伸）
         updateAxes(uiView)
         uiView.notifyDataSetChanged()
+    }
+    
+    // MARK: - Coordinator（监听缩放/平移，重绘徽章层）
+    final class Coordinator: NSObject, ChartViewDelegate {
+        weak var overlay: SignalBadgeOverlayView?
+        
+        func chartScaled(_ chartView: ChartViewBase, scaleX: CGFloat, scaleY: CGFloat) {
+            overlay?.setNeedsDisplay()
+        }
+        
+        func chartTranslated(_ chartView: ChartViewBase, dX: CGFloat, dY: CGFloat) {
+            overlay?.setNeedsDisplay()
+        }
     }
     
     private func updateAxes(_ chart: CandleStickChartView) {
@@ -106,10 +213,10 @@ struct CandleChartContainer: UIViewRepresentable {
         rightAxis.enabled = false
         
         chart.legend.enabled = false
-        chart.doubleTapToZoomEnabled = false
+        chart.doubleTapToZoomEnabled = true   // 双击恢复
         chart.pinchZoomEnabled = true
         chart.scaleXEnabled = true
-        chart.scaleYEnabled = false
+        chart.scaleYEnabled = true   // 放开Y轴缩放，双指捏合按比例缩放
         chart.drawGridBackgroundEnabled = false
         chart.borderColor = UIColor(AppColors.cardBorder)
         chart.borderLineWidth = 0.5
@@ -146,7 +253,7 @@ struct CandleChartContainer: UIViewRepresentable {
         return data
     }
     
-    // MARK: - 信号标记数据集
+    // MARK: - 信号连接线数据集（灰色虚线连极值；徽章由 SignalBadgeOverlayView 绘制）
     /// 当前显示币种的换算系数（CNY模式: 汇率/31.1035, USD模式: 1）
     private var displayFactor: Double {
         viewModel.useCNY ? viewModel.currentRate / ChartViewModel.gramPerOunce : 1.0
@@ -156,8 +263,7 @@ struct CandleChartContainer: UIViewRepresentable {
         guard !viewModel.signalMarkers.isEmpty else { return [] }
         let factor = displayFactor
         
-        // 追风揽月风格：白底红描边圈「多」（K线最低点下方），白底绿描边圈「空」（K线最高点上方）
-        // 灰色垂直虚线连接信号圈与K线极值点
+        // 追风揽月风格：灰色垂直虚线连接信号徽章与K线极值点
         let longSignals = viewModel.signalMarkers.filter { $0.type == .longOpen }
         let shortSignals = viewModel.signalMarkers.filter { $0.type == .shortOpen }
         
@@ -169,99 +275,44 @@ struct CandleChartContainer: UIViewRepresentable {
         
         var sets: [ChartDataSetProtocol] = []
         
-        // 多头信号：「多」圈在K线最低点下方
-        if !longSignals.isEmpty {
-            let longEntries = longSignals.map { sig -> ChartDataEntry in
-                let idx = sig.candleIndex
-                let lowY = (idx < klines.count ? klines[idx].low : sig.price) * factor
-                return ChartDataEntry(x: Double(idx), y: lowY - offset)
-            }
-            let s = ScatterChartDataSet(entries: longEntries, label: "多")
-            s.setScatterShape(.circle)
-            s.setColor(UIColor(AppColors.red))                 // 红描边
-            s.scatterShapeHoleColor = UIColor.white             // 白底
-            s.scatterShapeHoleRadius = 0.55                       // 空心半径（比例）
-            s.scatterShapeSize = 22
-            s.drawValuesEnabled = true
-            s.valueFormatter = SignalValueFormatter(text: "多")
-            s.valueTextColor = UIColor(AppColors.red)
-            s.valueFont = UIFont.boldSystemFont(ofSize: 10)
-            s.axisDependency = .left
-            sets.append(s)
-            
-            // 灰色垂直虚线：每个信号单独 2 点（圈位→K线最低点）
-            for sig in longSignals {
-                let idx = sig.candleIndex
-                let lowY = (idx < klines.count ? klines[idx].low : sig.price) * factor
-                let connEntries = [
-                    ChartDataEntry(x: Double(idx), y: lowY),
-                    ChartDataEntry(x: Double(idx), y: lowY - offset)
-                ]
-                let conn = LineChartDataSet(entries: connEntries, label: "")
-                conn.setColor(UIColor.gray.withAlphaComponent(0.6))
-                conn.lineWidth = 0.8
-                conn.lineDashLengths = [3, 3]
-                conn.drawCirclesEnabled = false
-                conn.drawValuesEnabled = false
-                conn.axisDependency = .left
-                sets.append(conn)
-            }
+        // 多头信号：虚线（圈位→K线最低点），每个信号单独 2 点避免相邻信号连成折线
+        for sig in longSignals {
+            let idx = sig.candleIndex
+            let lowY = (idx < klines.count ? klines[idx].low : sig.price) * factor
+            let connEntries = [
+                ChartDataEntry(x: Double(idx), y: lowY),
+                ChartDataEntry(x: Double(idx), y: lowY - offset)
+            ]
+            let conn = LineChartDataSet(entries: connEntries, label: "")
+            conn.setColor(UIColor.gray.withAlphaComponent(0.6))
+            conn.lineWidth = 0.8
+            conn.lineDashLengths = [3, 3]
+            conn.drawCirclesEnabled = false
+            conn.drawValuesEnabled = false
+            conn.axisDependency = .left
+            sets.append(conn)
         }
         
-        // 空头信号：「空」圈在K线最高点上方
-        if !shortSignals.isEmpty {
-            let shortEntries = shortSignals.map { sig -> ChartDataEntry in
-                let idx = sig.candleIndex
-                let highY = (idx < klines.count ? klines[idx].high : sig.price) * factor
-                return ChartDataEntry(x: Double(idx), y: highY + offset)
-            }
-            let s = ScatterChartDataSet(entries: shortEntries, label: "空")
-            s.setScatterShape(.circle)
-            s.setColor(UIColor(AppColors.green))               // 绿描边
-            s.scatterShapeHoleColor = UIColor.white             // 白底
-            s.scatterShapeHoleRadius = 0.55                       // 空心半径（比例）
-            s.scatterShapeSize = 22
-            s.drawValuesEnabled = true
-            s.valueFormatter = SignalValueFormatter(text: "空")
-            s.valueTextColor = UIColor(AppColors.green)
-            s.valueFont = UIFont.boldSystemFont(ofSize: 10)
-            s.axisDependency = .left
-            sets.append(s)
-            
-            // 灰色垂直虚线：每个信号单独 2 点（圈位→K线最高点）
-            for sig in shortSignals {
-                let idx = sig.candleIndex
-                let highY = (idx < klines.count ? klines[idx].high : sig.price) * factor
-                let connEntries = [
-                    ChartDataEntry(x: Double(idx), y: highY),
-                    ChartDataEntry(x: Double(idx), y: highY + offset)
-                ]
-                let conn = LineChartDataSet(entries: connEntries, label: "")
-                conn.setColor(UIColor.gray.withAlphaComponent(0.6))
-                conn.lineWidth = 0.8
-                conn.lineDashLengths = [3, 3]
-                conn.drawCirclesEnabled = false
-                conn.drawValuesEnabled = false
-                conn.axisDependency = .left
-                sets.append(conn)
-            }
+        // 空头信号：虚线（圈位→K线最高点）
+        for sig in shortSignals {
+            let idx = sig.candleIndex
+            let highY = (idx < klines.count ? klines[idx].high : sig.price) * factor
+            let connEntries = [
+                ChartDataEntry(x: Double(idx), y: highY),
+                ChartDataEntry(x: Double(idx), y: highY + offset)
+            ]
+            let conn = LineChartDataSet(entries: connEntries, label: "")
+            conn.setColor(UIColor.gray.withAlphaComponent(0.6))
+            conn.lineWidth = 0.8
+            conn.lineDashLengths = [3, 3]
+            conn.drawCirclesEnabled = false
+            conn.drawValuesEnabled = false
+            conn.axisDependency = .left
+            sets.append(conn)
         }
         
         // 追风揽月无独立平仓标记（多空交替=平仓+反手）
         return sets
-    }
-    
-    // MARK: - 信号文字 Formatter（图上显示「多」/「空」）
-    private class SignalValueFormatter: ValueFormatter {
-        let text: String
-        init(text: String) { self.text = text }
-        
-        func stringForValue(_ value: Double,
-                            entry: ChartDataEntry,
-                            dataSetIndex: Int,
-                            viewPortHandler: ViewPortHandler?) -> String {
-            return text
-        }
     }
     
     private var extraDataSets: [ChartDataSetProtocol] {
