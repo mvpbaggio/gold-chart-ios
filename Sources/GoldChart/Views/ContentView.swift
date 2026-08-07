@@ -34,7 +34,7 @@ struct ContentView: View {
                 bottomNav
             }
         }
-        .preferredColorScheme(.dark)
+
     }
     
     // MARK: - 顶部栏
@@ -119,7 +119,7 @@ struct ContentView: View {
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
-        .background(AppColors.cardBackground)
+        .background(AppColors.tabBarBackground)
         .overlay(Divider().background(AppColors.cardBorder), alignment: .top)
     }
     

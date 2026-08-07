@@ -2,23 +2,25 @@ import SwiftUI
 
 // MARK: - 颜色主题
 struct AppColors {
-    static let background = Color(hex: "0D1117")
-    static let cardBackground = Color(hex: "161B22")
-    static let cardBorder = Color(hex: "30363D")
-    static let gold = Color(hex: "F0B90B")
+    // 追风揽月浅色风格：柔和浅蓝背景 + 白色卡片
+    static let background = Color(hex: "E8F1F9")
+    static let cardBackground = Color(hex: "FFFFFF")
+    static let cardBorder = Color(hex: "D0DCE8")
+    static let gold = Color(hex: "E6A23C")
     static let red = Color(hex: "EF4444")       // 涨（中国红）
     static let green = Color(hex: "22C55E")     // 跌
-    static let textPrimary = Color(hex: "E6EDF3")
-    static let textSecondary = Color(hex: "8B949E")
-    static let textTertiary = Color(hex: "484F58")
-    static let accent = Color(hex: "F0B90B")
-    static let tabActive = Color(hex: "F0B90B")
-    static let tabInactive = Color(hex: "8B949E")
-    static let indicatorMA = Color(hex: "F0B90B")
-    static let indicatorEMA = Color(hex: "FF7B72")
-    static let indicatorMACD = Color(hex: "79C0FF")
-    static let indicatorRSI = Color(hex: "D2A8FF")
-    static let indicatorVolume = Color(hex: "58A6FF")
+    static let textPrimary = Color(hex: "1A2530")
+    static let textSecondary = Color(hex: "5A6B7C")
+    static let textTertiary = Color(hex: "9AA8B8")
+    static let accent = Color(hex: "E6A23C")
+    static let tabBarBackground = Color(hex: "B1D7FE")
+    static let tabActive = Color(hex: "2563EB")
+    static let tabInactive = Color(hex: "9AA8B8")
+    static let indicatorMA = Color(hex: "E6A23C")
+    static let indicatorEMA = Color(hex: "8B5CF6")
+    static let indicatorMACD = Color(hex: "3B82F6")
+    static let indicatorRSI = Color(hex: "EC4899")
+    static let indicatorVolume = Color(hex: "60A5FA")
     static let indicatorSuperTrend = Color(hex: "00E5FF")  // 青色
 }
 
