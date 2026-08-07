@@ -23,7 +23,7 @@ final class SignalBadgeOverlayView: UIView {
         guard let chart = chart, let vm = viewModel, !klines.isEmpty else { return }
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         
-        let factor = vm.useCNY ? vm.currentRate / ChartViewModel.gramPerOunce : 1.0
+        // 注：klines 已是 displayKlines（CNY已换算），锚点直接用，不再乘 factor（否则双乘）
         let transformer = chart.getTransformer(forAxis: .left)
         
         for sig in vm.signalMarkers.filter({ $0.type.isEntry }).suffix(5) {
@@ -33,10 +33,10 @@ final class SignalBadgeOverlayView: UIView {
             let anchorValue: Double
             let color: UIColor
             if sig.type == .longOpen {
-                anchorValue = klines[idx].low * factor
+                anchorValue = klines[idx].low
                 color = UIColor(AppColors.red)
             } else {
-                anchorValue = klines[idx].high * factor
+                anchorValue = klines[idx].high
                 color = UIColor(AppColors.green)
             }
             let anchor = transformer.pixelForValues(x: Double(idx), y: anchorValue)
@@ -151,9 +151,10 @@ struct CandleChartContainer: UIViewRepresentable {
         let leftAxis = chart.leftAxis
         leftAxis.removeAllLimitLines()
         
-        let currentPrice = (klines.last?.close ?? 0) * displayFactor
-        if currentPrice > 0 {
-            let liveLl = ChartLimitLine(limit: currentPrice, label: "\(String(format: "%.2f", currentPrice))")
+        // 现价取实时行情（每5秒刷新），无实时价时回退最后一根K线收盘
+        let livePrice = (viewModel.realTimeQuote?.price ?? (klines.last?.close ?? 0)) * displayFactor
+        if livePrice > 0 {
+            let liveLl = ChartLimitLine(limit: livePrice, label: "\(String(format: "%.2f", livePrice))")
             liveLl.labelPosition = .rightTop
             liveLl.lineWidth = 1
             liveLl.lineDashLengths = [4, 3]   // 红虚线现价线（同花顺）
@@ -178,7 +179,7 @@ struct CandleChartContainer: UIViewRepresentable {
         xAxis.granularity = 1
         xAxis.setLabelCount(6, force: false)
         xAxis.spaceMin = 1   // 左侧留1根K线空间
-        xAxis.spaceMax = 3   // 右侧留3根K线空间（最新K线不贴边，同口袋贵金属）
+        xAxis.spaceMax = 10  // 右侧留10根K线空间（最新K线不贴边，同口袋贵金属）
         xAxis.valueFormatter = IndexAxisValueFormatter(
             values: klines.enumerated().map { (i, k) in
                 if i % max(1, klines.count / 6) == 0 || i == klines.count - 1 {

@@ -124,7 +124,7 @@ class StockApiService {
                 close: close,
                 volume: volume
             )
-        }.reversed()
+        }
     }
     
     struct StockItem: Identifiable {

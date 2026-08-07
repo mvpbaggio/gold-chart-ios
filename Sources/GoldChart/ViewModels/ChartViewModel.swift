@@ -29,7 +29,7 @@ class ChartViewModel: ObservableObject {
     
     // 选中的指标
     @Published var signalMarkers: [SignalMarker] = []
-    @Published var showMA = false
+    @Published var showMA = true
     @Published var showEMA = false
     @Published var showMACD = false
     @Published var showRSI = false
