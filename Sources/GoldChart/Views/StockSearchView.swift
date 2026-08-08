@@ -71,20 +71,20 @@ struct StockSearchView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0) {
-                        ForEach(viewModel.favorites) { fav in
+                        ForEach(viewModel.results) { stock in
                             HStack {
-                                Button(action: { viewModel.selectFavorite(fav) }) {
+                                Button(action: { viewModel.selectStock(stock) }) {
                                     HStack {
                                         VStack(alignment: .leading, spacing: 2) {
-                                            Text(fav.name)
+                                            Text(stock.name)
                                                 .font(.system(size: 15, weight: .medium))
                                                 .foregroundColor(AppColors.textPrimary)
-                                            Text(fav.code)
+                                            Text(stock.code)
                                                 .font(.system(size: 12))
                                                 .foregroundColor(AppColors.textTertiary)
                                         }
                                         Spacer()
-                                        Text(fav.marketDisplay)
+                                        Text(stock.marketDisplay)
                                             .font(.system(size: 11))
                                             .foregroundColor(AppColors.gold)
                                             .padding(.horizontal, 6)
@@ -94,9 +94,9 @@ struct StockSearchView: View {
                                     }
                                     .padding(.vertical, 4)
                                 }
-                                Button(action: { viewModel.removeFavorite(fav) }) {
-                                    Image(systemName: "star.fill")
-                                        .foregroundColor(AppColors.gold)
+                                Button(action: { viewModel.toggleFavorite(stock) }) {
+                                    Image(systemName: viewModel.isFavorite(code: stock.code) ? "star.fill" : "star")
+                                        .foregroundColor(viewModel.isFavorite(code: stock.code) ? AppColors.gold : AppColors.textTertiary)
                                         .font(.system(size: 16))
                                         .padding(.trailing, 8)
                                 }
@@ -108,7 +108,6 @@ struct StockSearchView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                .listStyle(PlainListStyle())
                 .background(AppColors.background)
             }
         }
@@ -385,7 +384,7 @@ struct StockMiniChart: UIViewRepresentable {
         xAxis.avoidFirstLastClippingEnabled = true
         xAxis.granularity = 1
         xAxis.spaceMin = 1   // 左侧留1根K线空间
-        xAxis.spaceMax = 10  // 右侧留10根K线空间（最新K线不贴边）
+        xAxis.spaceMax = 30  // 右侧留30根K线空间（最新K线远离右缘）
         
         let leftAxis = chart.leftAxis
         leftAxis.labelTextColor = UIColor(AppColors.textTertiary)

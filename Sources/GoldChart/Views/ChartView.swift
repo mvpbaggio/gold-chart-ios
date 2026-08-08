@@ -34,12 +34,6 @@ struct ChartView: View {
                             .padding(.horizontal, 4)
                         }
                         
-                        // 副图指标
-                        if let indicator = viewModel.selectedIndicator {
-                            indicatorSubChart(indicator)
-                                .frame(height: 100)
-                                .padding(.horizontal, 4)
-                        }
                     }
                     
                     // 调试状态栏（K线实时更新诊断用）
@@ -56,10 +50,6 @@ struct ChartView: View {
                     // 指标选择
                     indicatorSelector
                     
-                    // 当前价格详细信息
-                    if !viewModel.klines.isEmpty {
-                        priceDetailCard
-                    }
                 }
             }
         }
@@ -472,103 +462,13 @@ struct ChartView: View {
                         .cornerRadius(4)
                 }
                 
-                ForEach(ChartViewModel.IndicatorType.allCases, id: \.rawValue) { indicator in
-                    Button(action: {
-                        viewModel.selectedIndicator = viewModel.selectedIndicator == indicator ? nil : indicator
-                    }) {
-                        Text(indicator.rawValue)
-                            .font(.system(size: 11))
-                            .foregroundColor(viewModel.selectedIndicator == indicator ? AppColors.gold : AppColors.textSecondary)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(viewModel.selectedIndicator == indicator ? AppColors.gold.opacity(0.12) : AppColors.cardBackground)
-                            .cornerRadius(4)
-                    }
-                }
+
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 4)
         }
     }
     
-    // MARK: - 副图指标
-    @ViewBuilder
-    private func indicatorSubChart(_ indicator: ChartViewModel.IndicatorType) -> some View {
-        switch indicator {
-        case .macd:
-            MACDChartView(macd: viewModel.computeMACD(), klineCount: viewModel.displayKlines.count)
-        case .rsi:
-            LineIndicatorChartView(values: viewModel.computeRSI(), name: "RSI", overbought: 70, oversold: 30, color: AppColors.indicatorRSI)
-        case .kdj:
-            KDJChartView(kdj: viewModel.computeKDJ())
-        case .obv:
-            LineIndicatorChartView(values: viewModel.computeOBV(), name: "OBV", overbought: nil, oversold: nil, color: AppColors.indicatorVolume)
-        case .hurst:
-            let h = viewModel.computeHurst()
-            HStack(spacing: 4) {
-                Text("Hurst")
-                    .font(.system(size: 11))
-                    .foregroundColor(AppColors.textTertiary)
-                Text(String(format: "%.3f", h))
-                    .font(.system(size: 12, weight: .bold))
-                    .foregroundColor(h > 0.5 ? AppColors.red : h < 0.5 ? AppColors.green : AppColors.textSecondary)
-                Text(h > 0.5 ? "趋势延续" : h < 0.5 ? "均值回归" : "随机游走")
-                    .font(.system(size: 10))
-                    .foregroundColor(AppColors.textTertiary)
-            }
-            .padding(.horizontal, 12)
-        default:
-            EmptyView()
-        }
-    }
-    
-    // MARK: - 价格详情卡片（仅保留 MACD/RSI，MA 文本已按超哥要求移除）
-    private var priceDetailCard: some View {
-        VStack(spacing: 6) {
-            let macd = viewModel.computeMACD()
-            if let dif = macd.dif.last ?? nil,
-               let dea = macd.dea.last ?? nil,
-               let hist = macd.histogram.last ?? nil {
-                HStack(spacing: 20) {
-                    indicatorLabel("DIF", value: String(format: "%.2f", dif), color: AppColors.gold)
-                    indicatorLabel("DEA", value: String(format: "%.2f", dea), color: AppColors.indicatorRSI)
-                    indicatorLabel("MACD", value: String(format: "%.2f", hist), color: hist >= 0 ? AppColors.red : AppColors.green)
-                }
-            }
-            
-            let rsi = viewModel.computeRSI()
-            if let rsiVal = rsi.last ?? nil {
-                HStack(spacing: 20) {
-                    indicatorLabel("RSI(14)", value: String(format: "%.1f", rsiVal),
-                                  color: rsiVal >= 70 ? AppColors.red : rsiVal <= 30 ? AppColors.green : AppColors.indicatorRSI)
-                }
-            }
-        }
-        .padding(12)
-        .background(AppColors.cardBackground)
-        .cornerRadius(8)
-        .overlay(RoundedRectangle(cornerRadius: 8).stroke(AppColors.cardBorder, lineWidth: 1))
-        .padding(.horizontal, 12)
-    }
-    
-    private func formatIndicatorValue(_ value: Double?) -> String {
-        guard let v = value else { return "--" }
-        if viewModel.useCNY {
-            return String(format: "%.2f", v * viewModel.currentRate / ChartViewModel.gramPerOunce)
-        }
-        return String(format: "%.2f", v)
-    }
-    
-    private func indicatorLabel(_ name: String, value: String, color: Color) -> some View {
-        HStack(spacing: 3) {
-            Text(name)
-                .font(.system(size: 11))
-                .foregroundColor(AppColors.textTertiary)
-            Text(value)
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(color)
-        }
-    }
 }
 
 

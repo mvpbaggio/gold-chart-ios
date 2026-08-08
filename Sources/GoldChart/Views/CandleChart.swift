@@ -268,7 +268,7 @@ struct CandleChartContainer: UIViewRepresentable {
         xAxis.granularity = 1
         xAxis.setLabelCount(6, force: false)
         xAxis.spaceMin = 1   // 左侧留1根K线空间
-        xAxis.spaceMax = 10  // 右侧留10根K线空间（最新K线不贴边，同口袋贵金属）
+        xAxis.spaceMax = 30  // 右侧留30根K线空间（最新K线远离右边，同花顺风格）
         xAxis.valueFormatter = IndexAxisValueFormatter(
             values: klines.enumerated().map { (i, k) in
                 if i % max(1, klines.count / 6) == 0 || i == klines.count - 1 {
