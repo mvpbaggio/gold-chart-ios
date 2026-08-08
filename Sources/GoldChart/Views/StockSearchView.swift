@@ -69,39 +69,44 @@ struct StockSearchView: View {
                     Spacer()
                 }
             } else {
-                List {
-                    ForEach(viewModel.results) { stock in
-                        HStack {
-                            Button(action: { viewModel.selectStock(stock) }) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(stock.name)
-                                            .font(.system(size: 15, weight: .medium))
-                                            .foregroundColor(AppColors.textPrimary)
-                                        Text(stock.code)
-                                            .font(.system(size: 12))
-                                            .foregroundColor(AppColors.textTertiary)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(viewModel.favorites) { fav in
+                            HStack {
+                                Button(action: { viewModel.selectFavorite(fav) }) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(fav.name)
+                                                .font(.system(size: 15, weight: .medium))
+                                                .foregroundColor(AppColors.textPrimary)
+                                            Text(fav.code)
+                                                .font(.system(size: 12))
+                                                .foregroundColor(AppColors.textTertiary)
+                                        }
+                                        Spacer()
+                                        Text(fav.marketDisplay)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppColors.gold)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(AppColors.gold.opacity(0.15))
+                                            .cornerRadius(4)
                                     }
-                                    Spacer()
-                                    Text(stock.marketDisplay)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(AppColors.gold)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(AppColors.gold.opacity(0.15))
-                                        .cornerRadius(4)
+                                    .padding(.vertical, 4)
                                 }
-                                .padding(.vertical, 4)
+                                Button(action: { viewModel.removeFavorite(fav) }) {
+                                    Image(systemName: "star.fill")
+                                        .foregroundColor(AppColors.gold)
+                                        .font(.system(size: 16))
+                                        .padding(.trailing, 8)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
                             }
-                            Button(action: { viewModel.toggleFavorite(stock) }) {
-                                Image(systemName: viewModel.isFavorite(code: stock.code) ? "star.fill" : "star")
-                                    .foregroundColor(viewModel.isFavorite(code: stock.code) ? AppColors.gold : AppColors.textTertiary)
-                                    .font(.system(size: 16))
-                                    .padding(.trailing, 8)
-                            }
-                            .buttonStyle(BorderlessButtonStyle())
+                            .padding(.horizontal, 16)
+                            Divider().background(AppColors.cardBorder)
                         }
                     }
+                    .padding(.vertical, 4)
                 }
                 .listStyle(PlainListStyle())
                 .background(AppColors.background)
@@ -123,48 +128,45 @@ struct StockSearchView: View {
                 }
                 Spacer()
             } else {
-                List {
-                    ForEach(viewModel.favorites) { fav in
-                        HStack {
-                            Button(action: { viewModel.selectFavorite(fav) }) {
-                                HStack {
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(fav.name)
-                                            .font(.system(size: 15, weight: .medium))
-                                            .foregroundColor(AppColors.textPrimary)
-                                        Text(fav.code)
-                                            .font(.system(size: 12))
-                                            .foregroundColor(AppColors.textTertiary)
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(viewModel.favorites) { fav in
+                            HStack {
+                                Button(action: { viewModel.selectFavorite(fav) }) {
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text(fav.name)
+                                                .font(.system(size: 15, weight: .medium))
+                                                .foregroundColor(AppColors.textPrimary)
+                                            Text(fav.code)
+                                                .font(.system(size: 12))
+                                                .foregroundColor(AppColors.textTertiary)
+                                        }
+                                        Spacer()
+                                        Text(fav.marketDisplay)
+                                            .font(.system(size: 11))
+                                            .foregroundColor(AppColors.gold)
+                                            .padding(.horizontal, 6)
+                                            .padding(.vertical, 2)
+                                            .background(AppColors.gold.opacity(0.15))
+                                            .cornerRadius(4)
                                     }
-                                    Spacer()
-                                    Text(fav.marketDisplay)
-                                        .font(.system(size: 11))
-                                        .foregroundColor(AppColors.gold)
-                                        .padding(.horizontal, 6)
-                                        .padding(.vertical, 2)
-                                        .background(AppColors.gold.opacity(0.15))
-                                        .cornerRadius(4)
+                                    .padding(.vertical, 4)
                                 }
-                                .padding(.vertical, 4)
+                                Button(action: { viewModel.removeFavorite(fav) }) {
+                                    Image(systemName: "star.fill")
+                                        .foregroundColor(AppColors.gold)
+                                        .font(.system(size: 16))
+                                        .padding(.trailing, 8)
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
                             }
-                            Button(action: { viewModel.removeFavorite(fav) }) {
-                                Image(systemName: "star.fill")
-                                    .foregroundColor(AppColors.gold)
-                                    .font(.system(size: 16))
-                                    .padding(.trailing, 8)
-                            }
-                            .buttonStyle(BorderlessButtonStyle())
+                            .padding(.horizontal, 16)
+                            Divider().background(AppColors.cardBorder)
                         }
                     }
-                    .onDelete { indexSet in
-                        indexSet.forEach { idx in
-                            if viewModel.favorites.indices.contains(idx) {
-                                viewModel.removeFavorite(viewModel.favorites[idx])
-                            }
-                        }
-                    }
+                    .padding(.vertical, 4)
                 }
-                .listStyle(PlainListStyle())
                 .background(AppColors.background)
             }
         }
