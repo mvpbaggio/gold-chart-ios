@@ -63,6 +63,7 @@ class RealTimeService: ObservableObject {
     
     /// 刷新市场开闭市状态（现货黄金/白银，夏令时交易时段）
     /// 夏令时（3月~11月）：周一06:00 ~ 周六05:00 连续交易；每日 05:00-06:00 休市结算；周六05:00收市到周一06:00开盘
+    /// ⚠️ Calendar.weekday: 1=周日, 2=周一, 3=周二, 4=周三, 5=周四, 6=周五, 7=周六（勿与 ISO 混淆）
     func refreshMarketStatus() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
@@ -81,20 +82,20 @@ class RealTimeService: ObservableObject {
         var secondsToChange: Double
         
         switch weekday {
-        case 2, 3, 4, 5:   // 周二~周五：00:00-05:00 开（延续前日），05:00-06:00 休，06:00-24:00 开
+        case 3, 4, 5, 6:   // 周二~周五：00:00-05:00 开（延续前日），05:00-06:00 休，06:00-24:00 开
             isOpen = secondsToday < h5 || secondsToday >= h6
             if isOpen {
                 secondsToChange = secondsToday < h5 ? (h5 - secondsToday) : (day - secondsToday + h5)
             } else {
                 secondsToChange = h6 - secondsToday
             }
-        case 6:   // 周六：00:00-05:00 开（延续周五），05:00 后休市到周一06:00
+        case 7:   // 周六：00:00-05:00 开（延续周五），05:00 后休市到周一06:00
             isOpen = secondsToday < h5
             secondsToChange = isOpen ? (h5 - secondsToday) : (day - secondsToday + day + h6)
         case 1:   // 周日：全天休市，到周一06:00开盘
             isOpen = false
             secondsToChange = day - secondsToday + h6
-        default:   // 周一：00:00-06:00 休，06:00-24:00 开
+        default:   // 周一(2)：00:00-06:00 休，06:00-24:00 开
             isOpen = secondsToday >= h6
             secondsToChange = isOpen ? (day - secondsToday + h5) : (h6 - secondsToday)
         }

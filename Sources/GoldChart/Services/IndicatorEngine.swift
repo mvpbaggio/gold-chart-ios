@@ -6,6 +6,26 @@ import Foundation
 // 已删除 App 独有指标：W%R / ATR / CCI / MFI / SuperTrend / Ichimoku
 class IndicatorEngine {
     
+    // MARK: - 平均真实波幅 ATR (14)
+    // TR = max(H-L, |H-前收|, |L-前收|)；ATR = 前 n 根 TR 的 SMA（与回测同款，非 Wilder）
+    static func atr(_ data: [Kline], period: Int = 14) -> [Double?] {
+        guard data.count > period else {
+            return Array(repeating: nil, count: data.count)
+        }
+        var result: [Double?] = Array(repeating: nil, count: data.count)
+        var trs: [Double] = []
+        for i in 1..<data.count {
+            let h = data[i].high, l = data[i].low, pc = data[i-1].close
+            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+        }
+        for i in period..<data.count {
+            let idx = i - 1
+            let window = trs[(idx - period + 1)...idx]
+            result[i] = window.reduce(0, +) / Double(period)
+        }
+        return result
+    }
+
     // MARK: - 移动平均线 (MA / SMA)
     static func ma(_ data: [Kline], period: Int) -> [Double?] {
         guard data.count >= period else {
