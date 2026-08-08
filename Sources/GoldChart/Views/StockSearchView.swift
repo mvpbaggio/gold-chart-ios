@@ -70,7 +70,7 @@ struct StockSearchView: View {
                 }
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    VStack(spacing: 0) {
                         ForEach(viewModel.results) { stock in
                             HStack {
                                 Button(action: { viewModel.selectStock(stock) }) {
@@ -109,6 +109,7 @@ struct StockSearchView: View {
                     .padding(.vertical, 4)
                 }
                 .background(AppColors.background)
+                .id(viewModel.results)   // 结果变化→整棵重建，避开懒加载增量渲染 bug
             }
         }
     }
@@ -128,7 +129,7 @@ struct StockSearchView: View {
                 Spacer()
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0) {
+                    VStack(spacing: 0) {
                         ForEach(viewModel.favorites) { fav in
                             HStack {
                                 Button(action: { viewModel.selectFavorite(fav) }) {
@@ -167,6 +168,7 @@ struct StockSearchView: View {
                     .padding(.vertical, 4)
                 }
                 .background(AppColors.background)
+                .id(viewModel.favorites)   // 集合变化 → 整棵重建，避开懒加载增量渲染 bug
             }
         }
     }
