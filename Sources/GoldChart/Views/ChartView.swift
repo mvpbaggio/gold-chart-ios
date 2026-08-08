@@ -30,7 +30,7 @@ struct ChartView: View {
                                 klines: viewModel.displayKlines,
                                 viewModel: viewModel
                             )
-                            .frame(height: 420)
+                            .frame(height: 480)
                             .padding(.horizontal, 4)
                         }
                         
@@ -60,8 +60,6 @@ struct ChartView: View {
                     if !viewModel.klines.isEmpty {
                         priceDetailCard
                     }
-                    
-                    Spacer()
                 }
             }
         }
@@ -524,19 +522,9 @@ struct ChartView: View {
         }
     }
     
-    // MARK: - 价格详情卡片
+    // MARK: - 价格详情卡片（仅保留 MACD/RSI，MA 文本已按超哥要求移除）
     private var priceDetailCard: some View {
         VStack(spacing: 6) {
-            let ma5 = viewModel.computeMA(period: 5)
-            let ma10 = viewModel.computeMA(period: 10)
-            let ma20 = viewModel.computeMA(period: 20)
-            
-            HStack(spacing: 20) {
-                indicatorLabel("MA5", value: formatIndicatorValue(ma5.last ?? nil), color: AppColors.indicatorMA)
-                indicatorLabel("MA10", value: formatIndicatorValue(ma10.last ?? nil), color: AppColors.indicatorEMA)
-                indicatorLabel("MA20", value: formatIndicatorValue(ma20.last ?? nil), color: AppColors.indicatorMA20)
-            }
-            
             let macd = viewModel.computeMACD()
             if let dif = macd.dif.last ?? nil,
                let dea = macd.dea.last ?? nil,

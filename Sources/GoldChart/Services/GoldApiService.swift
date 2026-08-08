@@ -304,7 +304,8 @@ class GoldApiService {
         let jitter = Double.random(in: 0.5...2.0)
         try await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000_000))
         let (range, interval) = mapPeriod(period)
-        let symbol = product == .xau ? "GC=F" : "SI=F"
+        // 现货代码（与东财 122.XAU/122.XAG、新浪 XAU/XAG 同标的）——⚠️ 勿用期货代码 GC=F/SI=F，会与现货日线混源导致价格跳变（期货比现货贵约60美元）
+        let symbol = product == .xau ? "XAUUSD=X" : "XAGUSD=X"
         let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? symbol
         
         // Yahoo域列表（轮换避免限流）
