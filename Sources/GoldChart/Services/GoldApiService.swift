@@ -1,7 +1,7 @@
 import Foundation
 
 /// 黄金/白银K线数据服务
-/// 数据源优先级：东方财富现货(122.XAU/122.XAG，全周期) → 代理服务器(可选) → 新浪财经(日K/周K) → Yahoo(分钟K) → Mock数据
+/// 数据源优先级：东方财富现货(122.XAU/122.XAG，全周期) → 代理服务器(可选) → 新浪现货(日K/1分钟K，全周期聚合) → Mock数据
 class GoldApiService {
     static let shared = GoldApiService()
     private let session: URLSession
@@ -38,15 +38,9 @@ class GoldApiService {
             return sinaResult
         }
         
-        // 3. Yahoo直连（分钟K兜底：1m-4h，带重试和域轮换；h4 用 60m 聚合）
-        if let yahooResult = try? await fetchFromYahoo(product: product, period: period) {
-            if period == .h4 {
-                return aggregateToH4(yahooResult)
-            }
-            return yahooResult
-        }
-        
-        // 4. 模拟数据兜底
+        // 3. 模拟数据兜底（所有真实源失败时，保底显示）
+        // 注：Yahoo 已移除兜底——期货代码 GC=F 价格与现货差~60美元会跳变，
+        // 现货代码 XAUUSD=X 在 Yahoo 不存在(Not Found)，只会落 Mock。新浪现货全周期已覆盖。
         let basePrice = product == .xau ? 4100.0 : 29.5
         return MockData.generateKlines(count: count, basePrice: basePrice)
     }
@@ -166,12 +160,161 @@ class GoldApiService {
     private func fetchFromSina(product: ProductType, period: KlinePeriod, count: Int) async throws -> [Kline] {
         switch period {
         case .d1:
-            let klines = try await fetchDailyWeeklyFromSina(product: product, period: period)
+            let klines = try await fetchSinaDaily(product: product)
             return Array(klines.suffix(count))
-        default:
-            // 分钟K/周K新浪不支持（周K接口已失效），交给Yahoo
+        case .w1:
+            // 周K = 日K按自然周聚合（新浪周K接口已失效）
+            let daily = try await fetchSinaDaily(product: product)
+            return Array(aggregateWeekly(daily).suffix(count))
+        case .m1, .m5, .m15, .m30, .h1, .h4:
+            // 分钟K = 新浪1分钟现货K聚合（接口返回近1个交易日约1374根）
+            let minute = try await fetchSinaMinute(product: product)
+            switch period {
+            case .m1:   return Array(minute.suffix(count))
+            case .m5:   return Array(aggregateKlines(minute, minutes: 5).suffix(count))
+            case .m15:  return Array(aggregateKlines(minute, minutes: 15).suffix(count))
+            case .m30:  return Array(aggregateKlines(minute, minutes: 30).suffix(count))
+            case .h1:   return Array(aggregateKlines(minute, minutes: 60).suffix(count))
+            case .h4:   return Array(aggregateKlines(minute, minutes: 240).suffix(count))
+            default:    throw APIError.noData
+            }
+        }
+    }
+    
+    /// 新浪现货日K（全量返回，实测 5185 根覆盖 2006 至今）
+    private func fetchSinaDaily(product: ProductType) async throws -> [Kline] {
+        let symbol = product.sinaSymbols[0]
+        let urlStr = "https://stock.finance.sina.com.cn/futures/api/openapi.php/GlobalFuturesService.getGlobalFuturesDailyKLine?symbol=\(symbol)&datalen=500"
+        guard let url = URL(string: urlStr) else { throw APIError.noData }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                        forHTTPHeaderField: "User-Agent")
+        request.setValue("https://finance.sina.com.cn", forHTTPHeaderField: "Referer")
+        let (data, response) = try await session.data(for: request)
+        guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200 else {
             throw APIError.noData
         }
+        let klines = try parseSinaGlobalKline(data)
+        return klines
+    }
+    
+    /// 新浪现货1分钟K（JSONP 格式，近1个交易日约1374根）
+    private func fetchSinaMinute(product: ProductType) async throws -> [Kline] {
+        let symbol = product.sinaSymbols[0]
+        let urlStr = "https://stock.finance.sina.com.cn/futures/api/jsonp.php/var%20_=/GlobalFuturesService.getGlobalFuturesMinLine?symbol=\(symbol)&type=1"
+        guard let url = URL(string: urlStr) else { throw APIError.noData }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 12
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+                        forHTTPHeaderField: "User-Agent")
+        request.setValue("https://finance.sina.com.cn", forHTTPHeaderField: "Referer")
+        let (data, response) = try await session.data(for: request)
+        guard let httpResp = response as? HTTPURLResponse, httpResp.statusCode == 200,
+              let body = String(data: data, encoding: .utf8) else {
+            throw APIError.noData
+        }
+        // 剥 JSONP 壳：var _=({...});
+        guard let openParen = body.range(of: "("),
+              let closeParen = body.range(of: ")", options: .backwards),
+              openParen.upperBound < closeParen.lowerBound else {
+            throw APIError.noData
+        }
+        let jsonStr = String(body[openParen.upperBound..<closeParen.lowerBound])
+        guard let json = try JSONSerialization.jsonObject(with: Data(jsonStr.utf8)) as? [String: Any],
+              let rows = json["minLine_1d"] as? [[Any]] else {
+            throw APIError.noData
+        }
+        
+        // 行格式: ["2026-08-07","4240.550","LIFFE","","06:00","4240.120","0","0","4239.520","2026-08-07 06:00:00"]
+        // 后续行: ["06:01","4240.180","0","0","4239.753","2026-08-07 06:01:00"]
+        // [1]=当前价(用做close)，[0]或[4]=时间，最后元素=完整时间戳
+        var klines: [Kline] = []
+        var lastClose: Double?
+        for row in rows {
+            guard row.count >= 6,
+                  let close = Double(row[1] as? String ?? ""), close > 0 else { continue }
+            var ts: TimeInterval = 0
+            if let fullTime = row.last as? String, fullTime.contains("-") {
+                ts = Self.sinaMinuteFormatter.date(from: fullTime)?.timeIntervalSince1970 ?? 0
+            }
+            guard ts > 0 else { continue }
+            let open = lastClose ?? close
+            let high = max(open, close)
+            let low = min(open, close)
+            klines.append(Kline(timestamp: ts * 1000, open: open, high: high, low: low, close: close, volume: 0))
+            lastClose = close
+        }
+        if klines.isEmpty { throw APIError.noData }
+        return klines
+    }
+    
+    private static let sinaMinuteFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        return f
+    }()
+    
+    /// 分钟K聚合：1分钟 → N分钟（滚动时间窗口）
+    private func aggregateKlines(_ klines: [Kline], minutes: Int) -> [Kline] {
+        guard minutes > 1, klines.count > 1 else { return klines }
+        let windowMs = Double(minutes) * 60 * 1000
+        var result: [Kline] = []
+        var current: (open: Double, high: Double, low: Double, close: Double, volume: Double, ts: TimeInterval)?
+        for k in klines {
+            if var cur = current {
+                if k.timestamp - cur.ts < windowMs {
+                    cur.high = max(cur.high, k.high)
+                    cur.low = min(cur.low, k.low)
+                    cur.close = k.close
+                    cur.volume = cur.volume + k.volume
+                    current = cur
+                } else {
+                    result.append(Kline(timestamp: cur.ts, open: cur.open, high: cur.high, low: cur.low, close: cur.close, volume: cur.volume))
+                    current = (k.open, k.high, k.low, k.close, k.volume, k.timestamp)
+                }
+            } else {
+                current = (k.open, k.high, k.low, k.close, k.volume, k.timestamp)
+            }
+        }
+        if let cur = current {
+            result.append(Kline(timestamp: cur.ts, open: cur.open, high: cur.high, low: cur.low, close: cur.close, volume: cur.volume))
+        }
+        return result
+    }
+    
+    /// 日K聚合周K（按自然周，ISO 周号分组）
+    private func aggregateWeekly(_ daily: [Kline]) -> [Kline] {
+        guard daily.count > 1 else { return daily }
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        var result: [Kline] = []
+        var current: (open: Double, high: Double, low: Double, close: Double, volume: Double, ts: TimeInterval, weekKey: Int)?
+        for k in daily {
+            let date = Date(timeIntervalSince1970: k.timestamp / 1000)
+            let comps = cal.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)
+            let weekKey = (comps.yearForWeekOfYear ?? 0) * 100 + (comps.weekOfYear ?? 0)
+            if var cur = current {
+                if weekKey == cur.weekKey {
+                    cur.high = max(cur.high, k.high)
+                    cur.low = min(cur.low, k.low)
+                    cur.close = k.close
+                    cur.volume = cur.volume + k.volume
+                    current = cur
+                } else {
+                    result.append(Kline(timestamp: cur.ts, open: cur.open, high: cur.high, low: cur.low, close: cur.close, volume: cur.volume))
+                    current = (k.open, k.high, k.low, k.close, k.volume, k.timestamp, weekKey)
+                }
+            } else {
+                current = (k.open, k.high, k.low, k.close, k.volume, k.timestamp, weekKey)
+            }
+        }
+        if let cur = current {
+            result.append(Kline(timestamp: cur.ts, open: cur.open, high: cur.high, low: cur.low, close: cur.close, volume: cur.volume))
+        }
+        return result
     }
     
     private func fetchDailyWeeklyFromSina(product: ProductType, period: KlinePeriod) async throws -> [Kline] {
@@ -294,142 +437,6 @@ class GoldApiService {
         case .h4:  return "4h"
         case .d1:  return "1d"
         case .w1:  return "1w"
-        }
-    }
-    
-    // MARK: - Yahoo Finance（分钟K兜底：带域轮换、重试、随机延迟）
-    
-    private func fetchFromYahoo(product: ProductType, period: KlinePeriod) async throws -> [Kline] {
-        // 随机延迟 0.5-2秒，分散请求避免限流
-        let jitter = Double.random(in: 0.5...2.0)
-        try await Task.sleep(nanoseconds: UInt64(jitter * 1_000_000_000))
-        let (range, interval) = mapPeriod(period)
-        // 现货代码（与东财 122.XAU/122.XAG、新浪 XAU/XAG 同标的）——⚠️ 勿用期货代码 GC=F/SI=F，会与现货日线混源导致价格跳变（期货比现货贵约60美元）
-        let symbol = product == .xau ? "XAUUSD=X" : "XAGUSD=X"
-        let encoded = symbol.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? symbol
-        
-        // Yahoo域列表（轮换避免限流）
-        let yahooHosts = ["query1.finance.yahoo.com", "query2.finance.yahoo.com"]
-        let userAgents = [
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
-        ]
-        
-        var lastError: Error?
-        
-        // 最多重试3次
-        for attempt in 0..<3 {
-            let host = yahooHosts[attempt % yahooHosts.count]
-            let ua = userAgents[attempt % userAgents.count]
-            
-            let urlStr = "https://\(host)/v8/finance/chart/\(encoded)?range=\(range)&interval=\(interval)"
-            guard let url = URL(string: urlStr) else {
-                lastError = APIError.invalidURL
-                continue
-            }
-            
-            var request = URLRequest(url: url)
-            request.timeoutInterval = 15
-            request.setValue(ua, forHTTPHeaderField: "User-Agent")
-            request.setValue("https://finance.yahoo.com", forHTTPHeaderField: "Referer")
-            
-            // 每次请求间隔，避免限流
-            if attempt > 0 {
-                try await Task.sleep(nanoseconds: UInt64(attempt) * 2_000_000_000)
-            }
-            
-            do {
-                let (data, response) = try await session.data(for: request)
-                guard let httpResponse = response as? HTTPURLResponse else {
-                    lastError = APIError.httpError
-                    continue
-                }
-                
-                if httpResponse.statusCode == 429 {
-                    // 限流，等更久再重试
-                    lastError = APIError.rateLimited
-                    try await Task.sleep(nanoseconds: 3_000_000_000)
-                    continue
-                }
-                
-                guard httpResponse.statusCode == 200 else {
-                    lastError = APIError.httpError
-                    continue
-                }
-                
-                let klines = try parseYahooResponse(data)
-                if !klines.isEmpty {
-                    return klines
-                }
-                lastError = APIError.noData
-            } catch {
-                lastError = error
-                continue
-            }
-        }
-        
-        throw lastError ?? APIError.noData
-    }
-    
-    private func parseYahooResponse(_ data: Data) throws -> [Kline] {
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let chart = json["chart"] as? [String: Any] else {
-            throw APIError.noData
-        }
-        
-        if let error = chart["error"] as? [String: Any], !error.isEmpty {
-            throw APIError.noData
-        }
-        
-        guard let result = (chart["result"] as? [[String: Any]])?.first,
-              let timestamps = result["timestamp"] as? [TimeInterval],
-              let indicators = result["indicators"] as? [String: Any],
-              let quote = (indicators["quote"] as? [[String: Any]])?.first else {
-            throw APIError.noData
-        }
-        
-        guard let opensArr = quote["open"] as? NSArray,
-              let highsArr = quote["high"] as? NSArray,
-              let lowsArr = quote["low"] as? NSArray,
-              let closesArr = quote["close"] as? NSArray,
-              let volsArr = quote["volume"] as? NSArray else {
-            throw APIError.noData
-        }
-        
-        let count = min(timestamps.count, opensArr.count, highsArr.count, lowsArr.count, closesArr.count, volsArr.count)
-        var klines: [Kline] = []
-        for i in 0..<count {
-            guard let o = opensArr[i] as? NSNumber, o.doubleValue > 0,
-                  let h = highsArr[i] as? NSNumber, h.doubleValue > 0,
-                  let l = lowsArr[i] as? NSNumber, l.doubleValue > 0,
-                  let c = closesArr[i] as? NSNumber, c.doubleValue > 0 else { continue }
-            let v = (volsArr[i] as? NSNumber)?.doubleValue ?? 0
-            klines.append(Kline(
-                timestamp: timestamps[i] * 1000,
-                open: o.doubleValue,
-                high: h.doubleValue,
-                low: l.doubleValue,
-                close: c.doubleValue,
-                volume: v
-            ))
-        }
-        
-        if klines.isEmpty { throw APIError.noData }
-        return klines
-    }
-    
-    /// 周期映射（分钟K走Yahoo；日K/周K走新浪）
-    private func mapPeriod(_ period: KlinePeriod) -> (range: String, interval: String) {
-        switch period {
-        case .m1:  return ("1d", "1m")
-        case .m5:  return ("5d", "5m")
-        case .m15: return ("1mo", "15m")
-        case .m30: return ("1mo", "30m")
-        case .h1:  return ("3mo", "60m")
-        case .h4:  return ("6mo", "60m")   // 修复：Yahoo 无原生4h，取60m后每4根聚合成4h
-        case .d1:  return ("1y", "1d")
-        case .w1:  return ("5y", "1wk")
         }
     }
     

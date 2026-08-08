@@ -61,15 +61,21 @@ class SearchViewModel: ObservableObject {
     
     func toggleFavorite(_ stock: StockApiService.StockItem) {
         if let idx = favorites.firstIndex(where: { $0.code == stock.code }) {
-            favorites.remove(at: idx)
+            var newList = favorites
+            newList.remove(at: idx)
+            favorites = newList
         } else {
-            favorites.append(FavoriteStock(code: stock.code, name: stock.name, market: stock.market))
+            var newList = favorites
+            newList.append(FavoriteStock(code: stock.code, name: stock.name, market: stock.market))
+            favorites = newList
         }
         saveFavorites()
     }
     
     func removeFavorite(_ stock: FavoriteStock) {
-        favorites.removeAll { $0.code == stock.code }
+        var newList = favorites
+        newList.removeAll { $0.code == stock.code }
+        favorites = newList
         saveFavorites()
     }
     
