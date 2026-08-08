@@ -133,7 +133,7 @@ class StockApiService {
         }
     }
     
-    struct StockItem: Identifiable {
+    struct StockItem: Identifiable, Hashable {
         let id = UUID()
         let code: String
         let name: String

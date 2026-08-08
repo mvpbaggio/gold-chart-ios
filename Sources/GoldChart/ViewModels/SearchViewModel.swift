@@ -1,7 +1,7 @@
 import Foundation
 
 /// A股自选股（可持久化到 UserDefaults）
-struct FavoriteStock: Codable, Identifiable, Equatable {
+struct FavoriteStock: Codable, Identifiable, Equatable, Hashable {
     let code: String
     let name: String
     let market: String
