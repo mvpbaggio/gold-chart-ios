@@ -102,8 +102,18 @@ final class SignalBadgeOverlayView: UIView {
         let padX: CGFloat = 6, padY: CGFloat = 3
         let boxW = textSize.width + padX * 2
         let boxH = textSize.height + padY * 2
-        // 标签垂直位置：高点在极值上方 26pt，低点在极值下方 26pt
-        let labelY = isHigh ? anchor.y - 26 : anchor.y + 26
+        // 标签垂直位置：默认高点在极值上方、低点在极值下方；但极值贴近图表边界时翻转到内侧（否则超出 bounds 被裁剪看不见）
+        let chartHeight = chart?.bounds.height ?? 400
+        let aboveY = anchor.y - 26
+        let belowY = anchor.y + 26
+        let labelY: CGFloat
+        if isHigh {
+            // 高点：优先上方；上方空间不足（贴近图表顶部）则放下方
+            labelY = (aboveY - boxH / 2) >= 0 ? aboveY : belowY
+        } else {
+            // 低点：优先下方；下方空间不足（贴近图表底部）则放上方 ← 修复最低价标签看不见
+            labelY = (belowY + boxH / 2) <= chartHeight ? belowY : aboveY
+        }
         
         // 标签默认在K线右侧；右侧超界则移到左侧
         let chartWidth = chart?.bounds.width ?? 400

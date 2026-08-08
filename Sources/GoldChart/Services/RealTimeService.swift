@@ -62,8 +62,7 @@ class RealTimeService: ObservableObject {
     }
     
     /// 刷新市场开闭市状态（现货黄金/白银，夏令时交易时段）
-    /// 夏令时（3月~11月）：周一06:00 ~ 周六05:00 连续交易；每日 05:00-06:00 休市；周六05:00收市到周一06:00开盘
-    /// （口袋截图实测：8月「休市 04:56:59」→ 每日05:00休市倒计时，吻合）
+    /// 夏令时（3月~11月）：周一06:00 ~ 周六05:00 连续交易；每日 05:00-06:00 休市结算；周六05:00收市到周一06:00开盘
     func refreshMarketStatus() {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
@@ -74,43 +73,30 @@ class RealTimeService: ObservableObject {
         let second = comps.second ?? 0
         let secondsToday = Double(hour * 3600 + minute * 60 + second)
         
-        let dailyOpen: Double = 6 * 3600        // 06:00 开盘
-        let dailyClose: Double = 29 * 3600      // 次日05:00 休市（跨天）
+        let h5 = 5 * 3600.0    // 05:00
+        let h6 = 6 * 3600.0    // 06:00
+        let day = 24 * 3600.0
         
-        var isOpen = false
-        var secondsToChange: Double = 0
+        var isOpen: Bool
+        var secondsToChange: Double
         
         switch weekday {
-        case 2, 3, 4, 5:   // 周二~周五
-            if secondsToday >= dailyOpen && secondsToday < dailyClose {
-                isOpen = true
-                secondsToChange = dailyClose - secondsToday
-            } else if secondsToday < dailyOpen {
-                isOpen = false
-                secondsToChange = dailyOpen - secondsToday
+        case 2, 3, 4, 5:   // 周二~周五：00:00-05:00 开（延续前日），05:00-06:00 休，06:00-24:00 开
+            isOpen = secondsToday < h5 || secondsToday >= h6
+            if isOpen {
+                secondsToChange = secondsToday < h5 ? (h5 - secondsToday) : (day - secondsToday + h5)
             } else {
-                isOpen = false
-                secondsToChange = (24 * 3600 - secondsToday) + dailyOpen
+                secondsToChange = h6 - secondsToday
             }
-        case 6:   // 周六：00:00-05:00 交易，之后休市到周一06:00
-            if secondsToday < dailyClose {
-                isOpen = true
-                secondsToChange = dailyClose - secondsToday
-            } else {
-                isOpen = false
-                secondsToChange = (24 * 3600 - secondsToday) + 2 * 24 * 3600 + dailyOpen
-            }
+        case 6:   // 周六：00:00-05:00 开（延续周五），05:00 后休市到周一06:00
+            isOpen = secondsToday < h5
+            secondsToChange = isOpen ? (h5 - secondsToday) : (day - secondsToday + day + h6)
         case 1:   // 周日：全天休市，到周一06:00开盘
             isOpen = false
-            secondsToChange = (24 * 3600 - secondsToday) + dailyOpen
-        default:   // 周一：00:00-05:00 休市，06:00 开盘
-            if secondsToday < dailyOpen {
-                isOpen = false
-                secondsToChange = dailyOpen - secondsToday
-            } else {
-                isOpen = true
-                secondsToChange = dailyClose - secondsToday
-            }
+            secondsToChange = day - secondsToday + h6
+        default:   // 周一：00:00-06:00 休，06:00-24:00 开
+            isOpen = secondsToday >= h6
+            secondsToChange = isOpen ? (day - secondsToday + h5) : (h6 - secondsToday)
         }
         
         DispatchQueue.main.async {

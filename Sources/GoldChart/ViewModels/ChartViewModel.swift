@@ -186,13 +186,15 @@ class ChartViewModel: ObservableObject {
     
     private func updateRealtimeCandle(quote: RealTimeQuote) {
         guard !realtimeKlines.isEmpty, historicalCount > 0 else { return }
+        // 休市时不延伸K线（数据定格，避免每5秒推送把时间戳往后推、K线一直生长）
+        guard RealTimeService.shared.marketStatus.isOpen else { return }
         
         let timePerCandle = periodInSeconds
         let now = Date().timeIntervalSince1970 * 1000
         var updated = realtimeKlines
         
-        if updated.count <= historicalCount {
-            // 只有历史K线，附加上一根实时K线
+        if updated.count == historicalCount {
+            // 只有历史K线，附加上一根实时K线（严格等于才 append，避免重复生长）
             let lastTime = updated.last!.timestamp
             let periodsSince = max(1, Int((now - lastTime) / timePerCandle))
             let liveTime = lastTime + timePerCandle * Double(periodsSince)
