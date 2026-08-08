@@ -73,6 +73,7 @@ class SearchViewModel: ObservableObject {
         saveFavorites()
     }
     
+    @MainActor
     func selectFavorite(_ stock: FavoriteStock) {
         let item = StockApiService.StockItem(code: stock.code, name: stock.name, market: stock.market, pinyin: "")
         selectStock(item)
