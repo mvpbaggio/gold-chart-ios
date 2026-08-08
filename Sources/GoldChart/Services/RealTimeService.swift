@@ -65,11 +65,14 @@ class RealTimeService: ObservableObject {
     /// 夏令时（3月~11月）：周一06:00 ~ 周六05:00 连续交易；每日 05:00-06:00 休市；周六05:00收市到周一06:00开盘
     /// （口袋截图实测：8月「休市 04:56:59」→ 每日05:00休市倒计时，吻合）
     func refreshMarketStatus() {
-        let cal = Calendar(identifier: .gregorian)
+        var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
         let comps = cal.dateComponents([.weekday, .hour, .minute, .second], from: Date())
         let weekday = comps.weekday ?? 1   // 1=周日 ... 7=周六
-        let secondsToday = Double((comps.hour ?? 0) * 3600 + (comps.minute ?? 0) * 60 + (comps.second ?? 0))
+        let hour = comps.hour ?? 0
+        let minute = comps.minute ?? 0
+        let second = comps.second ?? 0
+        let secondsToday = Double(hour * 3600 + minute * 60 + second)
         
         let dailyOpen: Double = 6 * 3600        // 06:00 开盘
         let dailyClose: Double = 29 * 3600      // 次日05:00 休市（跨天）
