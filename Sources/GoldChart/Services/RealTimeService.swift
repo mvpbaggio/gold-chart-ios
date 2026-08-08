@@ -99,9 +99,8 @@ class RealTimeService: ObservableObject {
             secondsToChange = isOpen ? (day - secondsToday + h5) : (h6 - secondsToday)
         }
         
-        DispatchQueue.main.async {
-            self.marketStatus = MarketStatus(isOpen: isOpen, secondsToChange: secondsToChange)
-        }
+        // 所有调用方（startPolling/timer/fetchQuote）均在主线程，直接同步赋值，保证立即生效
+        self.marketStatus = MarketStatus(isOpen: isOpen, secondsToChange: secondsToChange)
     }
     
     func stopPolling() {
@@ -164,6 +163,8 @@ class RealTimeService: ObservableObject {
     }
     
     private func fetchQuote(product: ProductType) {
+        // 先同步刷新市场状态（保证 guard 读到最新值，启动/轮询均生效）
+        refreshMarketStatus()
         // 休市时不拉行情：价格定格在最后值，避免东财/新浪两个源价格差异导致来回跳（实测东财4342.18 vs 新浪4341.12）
         guard marketStatus.isOpen else { return }
         fetchFromEastMoney(product: product)
