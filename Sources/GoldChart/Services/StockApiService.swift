@@ -83,10 +83,16 @@ class StockApiService {
         return items.compactMap { item in
             let parts = item.components(separatedBy: ",")
             guard parts.count >= 3 else { return nil }
+            // 新浪 suggest 实测格式（输代码搜索时）:
+            // sh600519,11,600519,sh600519,贵州茅台,,贵州茅台,99,1,ESG,,
+            // [0]带前缀代码 [2]纯代码 [3]带前缀代码 [4]中文名 → 名称必须取 parts[4]，否则输代码不显示中文
+            let symbol = parts.count > 3 && !parts[3].isEmpty ? parts[3] : parts[0]
+            let name = (parts.count > 4 && !parts[4].isEmpty) ? parts[4] : parts[0]
+            let market = symbol.hasPrefix("sh") ? "sh" : (symbol.hasPrefix("sz") ? "sz" : (parts.count > 1 ? parts[1] : "sz"))
             return StockItem(
                 code: parts[2],
-                name: parts[0],
-                market: parts[1],
+                name: name,
+                market: market,
                 pinyin: parts.count > 3 ? parts[3] : ""
             )
         }

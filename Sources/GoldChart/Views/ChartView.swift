@@ -3,6 +3,7 @@ import SwiftUI
 @available(iOS 14.0, *)
 struct ChartView: View {
     @ObservedObject var viewModel: ChartViewModel
+    @ObservedObject private var realTimeService = RealTimeService.shared
     
     var body: some View {
         VStack(spacing: 0) {
@@ -77,6 +78,11 @@ struct ChartView: View {
             Text(viewModel.isRealTimeConnected ? "实时" : "延迟")
                 .font(.system(size: 10))
                 .foregroundColor(AppColors.textTertiary)
+            
+            // 市场开闭市状态（口袋贵金属式：开市 / 休市 HH:mm:ss）
+            Text(realTimeService.marketStatus.displayText)
+                .font(.system(size: 10, weight: .medium))
+                .foregroundColor(realTimeService.marketStatus.isOpen ? AppColors.red : AppColors.textSecondary)
             
             if let quote = viewModel.realTimeQuote {
                 Text(quote.time)

@@ -9,9 +9,12 @@ class RealTimeService: ObservableObject {
     @Published var quote: RealTimeQuote?
     @Published var isConnected = false
     @Published var exchangeRate: Double = 7.25   // USDCNY，初始默认值，启动后自动刷新为实时汇率
+    /// 市场开闭市状态（口袋贵金属式顶部提示）
+    @Published var marketStatus = MarketStatus(isOpen: false, secondsToChange: 0)
     
     private var timer: Timer?
     private var fxTimer: Timer?
+    private var statusTimer: Timer?
     /// 东财现货 secid（市场122=FORPM，现货伦敦金/银）
     private let emSecids: [ProductType: String] = [
         .xau: "122.XAU",
@@ -38,15 +41,77 @@ class RealTimeService: ObservableObject {
         fetchQuote(product: product)
         // 立即获取一次汇率
         fetchExchangeRate()
+        // 立即刷新市场状态
+        refreshMarketStatus()
         
         // 每5秒轮询行情（原1秒，改为5秒省流量防限流）
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.fetchQuote(product: product)
+            self?.refreshMarketStatus()
         }
         
         // 每30秒刷新汇率
         fxTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
             self?.fetchExchangeRate()
+        }
+        
+        // 每1秒刷新市场状态（倒计时每秒跳动，口袋式）
+        statusTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.refreshMarketStatus()
+        }
+    }
+    
+    /// 刷新市场开闭市状态（现货黄金/白银，夏令时交易时段）
+    /// 夏令时（3月~11月）：周一06:00 ~ 周六05:00 连续交易；每日 05:00-06:00 休市；周六05:00收市到周一06:00开盘
+    /// （口袋截图实测：8月「休市 04:56:59」→ 每日05:00休市倒计时，吻合）
+    func refreshMarketStatus() {
+        let cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        let comps = cal.dateComponents([.weekday, .hour, .minute, .second], from: Date())
+        let weekday = comps.weekday ?? 1   // 1=周日 ... 7=周六
+        let secondsToday = Double((comps.hour ?? 0) * 3600 + (comps.minute ?? 0) * 60 + (comps.second ?? 0))
+        
+        let dailyOpen: Double = 6 * 3600        // 06:00 开盘
+        let dailyClose: Double = 29 * 3600      // 次日05:00 休市（跨天）
+        
+        var isOpen = false
+        var secondsToChange: Double = 0
+        
+        switch weekday {
+        case 2, 3, 4, 5:   // 周二~周五
+            if secondsToday >= dailyOpen && secondsToday < dailyClose {
+                isOpen = true
+                secondsToChange = dailyClose - secondsToday
+            } else if secondsToday < dailyOpen {
+                isOpen = false
+                secondsToChange = dailyOpen - secondsToday
+            } else {
+                isOpen = false
+                secondsToChange = (24 * 3600 - secondsToday) + dailyOpen
+            }
+        case 6:   // 周六：00:00-05:00 交易，之后休市到周一06:00
+            if secondsToday < dailyClose {
+                isOpen = true
+                secondsToChange = dailyClose - secondsToday
+            } else {
+                isOpen = false
+                secondsToChange = (24 * 3600 - secondsToday) + 2 * 24 * 3600 + dailyOpen
+            }
+        case 1:   // 周日：全天休市，到周一06:00开盘
+            isOpen = false
+            secondsToChange = (24 * 3600 - secondsToday) + dailyOpen
+        default:   // 周一：00:00-05:00 休市，06:00 开盘
+            if secondsToday < dailyOpen {
+                isOpen = false
+                secondsToChange = dailyOpen - secondsToday
+            } else {
+                isOpen = true
+                secondsToChange = dailyClose - secondsToday
+            }
+        }
+        
+        DispatchQueue.main.async {
+            self.marketStatus = MarketStatus(isOpen: isOpen, secondsToChange: secondsToChange)
         }
     }
     
@@ -55,6 +120,8 @@ class RealTimeService: ObservableObject {
         timer = nil
         fxTimer?.invalidate()
         fxTimer = nil
+        statusTimer?.invalidate()
+        statusTimer = nil
         isConnected = false
     }
     
@@ -249,5 +316,22 @@ class RealTimeService: ObservableObject {
         
         self.quote = quote
         self.isConnected = true
+    }
+}
+
+// MARK: - 市场开闭市状态
+/// 现货黄金/白银（夏令时）交易时段：周一06:00 ~ 周六05:00 连续交易，每日 05:00-06:00 休市
+struct MarketStatus: Equatable {
+    let isOpen: Bool
+    let secondsToChange: Double
+    
+    /// 显示文案：开市 → "开市"；休市 → "休市 HH:mm:ss"（倒计时到下次开盘，口袋贵金属式）
+    var displayText: String {
+        if isOpen { return "开市" }
+        let s = Int(secondsToChange)
+        let h = s / 3600
+        let m = (s % 3600) / 60
+        let sec = s % 60
+        return String(format: "休市 %02d:%02d:%02d", h, m, sec)
     }
 }

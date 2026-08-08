@@ -26,6 +26,9 @@ final class SignalBadgeOverlayView: UIView {
         // 注：klines 已是 displayKlines（CNY已换算），锚点直接用，不再乘 factor（否则双乘）
         let transformer = chart.getTransformer(forAxis: .left)
         
+        // 口袋式：可见区最高/最低价自动标注（价格标签 + 横虚线）
+        drawExtremeLabels(ctx: ctx, chart: chart, transformer: transformer)
+        
         for sig in vm.signalMarkers.filter({ $0.type.isEntry }).suffix(5) {
             guard sig.candleIndex < klines.count else { continue }
             let idx = sig.candleIndex
@@ -54,6 +57,82 @@ final class SignalBadgeOverlayView: UIView {
             
             drawBadge(ctx: ctx, center: badgeCenter, color: color, text: sig.type.marker)
         }
+    }
+    
+    // MARK: - 口袋式可见区最高/最低标注
+    /// 当前可见范围内自动找最高/最低价，画价格标签 + 横虚线（缩放/平移时由 chartScaled/chartTranslated 触发重绘）
+    private func drawExtremeLabels(ctx: CGContext, chart: CandleStickChartView, transformer: Transformer) {
+        guard !klines.isEmpty else { return }
+        
+        // 可见 x 范围（x 即 K线索引），clamp 到有效区间
+        let startX = max(0, Int(chart.lowestVisibleX.rounded(.down)))
+        let endX = min(klines.count - 1, Int(chart.highestVisibleX.rounded(.up)))
+        guard startX <= endX else { return }
+        
+        var highIdx = startX, lowIdx = startX
+        var highVal = klines[startX].high, lowVal = klines[startX].low
+        if startX < endX {
+            for i in (startX + 1)...endX {
+                if klines[i].high > highVal { highVal = klines[i].high; highIdx = i }
+                if klines[i].low < lowVal { lowVal = klines[i].low; lowIdx = i }
+            }
+        }
+        
+        // 高低点同一根K线时只画一次（防止重叠）
+        if highIdx == lowIdx {
+            drawExtremeBadge(ctx: ctx, transformer: transformer, idx: highIdx, value: highVal, isHigh: true)
+            return
+        }
+        drawExtremeBadge(ctx: ctx, transformer: transformer, idx: highIdx, value: highVal, isHigh: true)
+        drawExtremeBadge(ctx: ctx, transformer: transformer, idx: lowIdx, value: lowVal, isHigh: false)
+    }
+    
+    /// 单个极值标签：白底圆角框 + 价格文字 + 横虚线指向K线极值点
+    private func drawExtremeBadge(ctx: CGContext, transformer: Transformer, idx: Int, value: Double, isHigh: Bool) {
+        let anchor = transformer.pixelForValues(x: Double(idx), y: value)
+        let color: UIColor = isHigh ? UIColor(AppColors.red) : UIColor(AppColors.green)
+        let text = String(format: "%.2f", value)
+        
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: 10),
+            .foregroundColor: color
+        ]
+        let str = text as NSString
+        let textSize = str.size(withAttributes: attrs)
+        let padX: CGFloat = 6, padY: CGFloat = 3
+        let boxW = textSize.width + padX * 2
+        let boxH = textSize.height + padY * 2
+        // 标签垂直位置：高点在极值上方 26pt，低点在极值下方 26pt
+        let labelY = isHigh ? anchor.y - 26 : anchor.y + 26
+        
+        // 标签默认在K线右侧；右侧超界则移到左侧
+        let chartWidth = chart?.bounds.width ?? 400
+        var boxX = anchor.x + 5
+        if boxX + boxW + 5 > chartWidth {
+            boxX = anchor.x - boxW - 5
+        }
+        let boxRect = CGRect(x: boxX, y: labelY - boxH / 2, width: boxW, height: boxH)
+        
+        // 横虚线：K线极值点 → 标签左/右边缘（水平方向）
+        ctx.saveGState()
+        ctx.setStrokeColor(color.withAlphaComponent(0.7).cgColor)
+        ctx.setLineWidth(1)
+        ctx.setLineDash(phase: 0, lengths: [3, 3])
+        ctx.move(to: CGPoint(x: anchor.x, y: anchor.y))
+        let lineEndX = boxX > anchor.x ? boxX : boxX + boxW
+        ctx.addLine(to: CGPoint(x: lineEndX, y: anchor.y))
+        ctx.strokePath()
+        ctx.restoreGState()
+        
+        // 白底标签
+        ctx.setFillColor(UIColor.white.cgColor)
+        ctx.fill(boxRect)
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setLineWidth(1)
+        ctx.stroke(boxRect)
+        // 价格文字居中
+        str.draw(at: CGPoint(x: boxRect.midX - textSize.width / 2, y: boxRect.midY - textSize.height / 2),
+                 withAttributes: attrs)
     }
     
     private func drawBadge(ctx: CGContext, center: CGPoint, color: UIColor, text: String) {
