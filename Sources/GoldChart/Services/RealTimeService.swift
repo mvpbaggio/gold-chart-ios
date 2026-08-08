@@ -37,14 +37,14 @@ class RealTimeService: ObservableObject {
         stopPolling()
         isConnected = false
         
-        // 立即获取一次行情
+        // 先刷新市场状态（再决定是否拉行情，避免休市时首拉把价格拉成另一源）
+        refreshMarketStatus()
+        // 立即获取一次行情（休市时内部会跳过）
         fetchQuote(product: product)
         // 立即获取一次汇率
         fetchExchangeRate()
-        // 立即刷新市场状态
-        refreshMarketStatus()
         
-        // 每5秒轮询行情（原1秒，改为5秒省流量防限流）
+        // 每5秒轮询行情（原1秒，改为5秒省流量防限流；休市时 fetchQuote 内部跳过）
         timer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
             self?.fetchQuote(product: product)
             self?.refreshMarketStatus()
@@ -164,6 +164,8 @@ class RealTimeService: ObservableObject {
     }
     
     private func fetchQuote(product: ProductType) {
+        // 休市时不拉行情：价格定格在最后值，避免东财/新浪两个源价格差异导致来回跳（实测东财4342.18 vs 新浪4341.12）
+        guard marketStatus.isOpen else { return }
         fetchFromEastMoney(product: product)
     }
     
