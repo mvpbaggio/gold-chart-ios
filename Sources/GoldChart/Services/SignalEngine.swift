@@ -1,298 +1,404 @@
 import Foundation
 
-// MARK: - 信号引擎（金银专用引擎 + 追风揽月信号/止损）
-// 评分公式（超哥给的金银专用技能提炼）：
-//   cta  = china-technical-analysis 期货官方综合评分（MACD30%+RSI20%+MA25%+布林10%+KDJ15%）
-//   gold = aistockresearcher GoldAnalyzer 趋势分（MA5/20/60 排列 + RSI 调节）
-//   融合 = (cta×1 + gold×3) / 4 → -100~+100
-//   >20 多 / <−20 空 / 中间观望
-// 追风揽月规则：
-//   信号 → K线图上标「多」/「空」圆点；反向信号 → 平仓并开反向仓
-//   止损：吊灯止损（Chandelier Exit，回测验证正期望）
-//     多头 = 持仓最高价 − 3×ATR(14)，空头 = 持仓最低价 + 3×ATR(14)
-//   止盈：无固定止盈，让利润奔跑；反向信号即平仓
+// MARK: - 金银信号引擎 v4（回测定稿 · 2026-08-09）
+// 回测基准（金银 2590 根 × 严格7窗样本外 +149% 回撤-26%，80组邻域78组正收益）：
+//   因子：动量(s_biga_gold) 1 : EMA排列(s_ema_align) 1 : 波动状态(atr_state) 2 : RSI动量(rsi_momentum) 2
+//   开仓：评分 ≥ +18 做多 / ≤ -18 做空；ADX(14) ≥ 20 过滤（仅开仓时）
+//   出场：吊灯 3×ATR + 移动止盈 2×ATR（trail），保本关（BE=false）
+//   反手：评分反向过阈值 → 先平仓再开反向仓
+// 算法与 /tmp/bt/engine_v4.py + gold_grid.py 1:1 对齐
 class SignalEngine {
-    
-    // MARK: - 配置
+
+    // MARK: - 配置（回测定稿参数）
     struct Config {
-        var longThreshold: Int = 20        // 评分 > 20 做多
-        var shortThreshold: Int = -20      // 评分 < -20 做空
+        var longThreshold: Int = 18        // 评分 ≥ 18 做多
+        var shortThreshold: Int = -18      // 评分 ≤ -18 做空
         var chandelierATR: Double = 3.0    // 吊灯止损 ATR 倍数
-        
+        var trailATR: Double = 2.0         // 移动止盈 ATR 倍数
+        var adxMin: Double = 20.0          // ADX 过滤（开仓）
+        var useBreakEven: Bool = false     // 保本开关（回测 BE0 → false）
+
         static let `default` = Config()
     }
-    
+
     static var config = Config.default
-    
-    // MARK: - 金银融合评分 (cta×1 + gold×3) / 4
+
+    // MARK: - 预计算（与回测 precompute 1:1）
+    private struct Pre {
+        let opens: [Double]
+        let highs: [Double]
+        let lows: [Double]
+        let closes: [Double]
+        let ema9: [Double]
+        let ema21: [Double]
+        let ema50: [Double]
+        let ema200: [Double]
+        let rsi: [Double]       // SMA 型 RSI（回测 optimize.rsi）
+        let atr: [Double]       // SMA 型 ATR（含当天 TR，回测 optimize.atr）
+        let adx: [Double]       // Wilder ADX（回测 final6.adx）
+        let chg5: [Double]      // 5日涨跌幅 %
+        let chg: [Double]       // 单日涨跌幅 %
+        let amp: [Double]       // 振幅 = (H-L)/O*100
+    }
+
+    // EMA：种子 = 首根 close（回测 ema_arr / optimize.ema，非 SMA 种子）
+    private static func emaArr(_ vals: [Double], _ p: Int) -> [Double] {
+        var out = [Double](repeating: 0, count: vals.count)
+        guard !vals.isEmpty, p > 0 else { return out }
+        let k = 2.0 / Double(p + 1)
+        var e = vals[0]
+        out[0] = e
+        for i in 1..<vals.count {
+            e = vals[i] * k + e * (1 - k)
+            out[i] = e
+        }
+        return out
+    }
+
+    // ATR：SMA of TR；TR[0]=H-L；out[i] = mean(TR[i-13...i])（回测 optimize.atr）
+    private static func atrPy(_ kl: [Kline], _ p: Int = 14) -> [Double] {
+        let n = kl.count
+        var trs = [Double](repeating: 0, count: n)
+        for i in 0..<n {
+            if i == 0 {
+                trs[i] = kl[i].high - kl[i].low
+            } else {
+                trs[i] = max(kl[i].high - kl[i].low,
+                             abs(kl[i].high - kl[i-1].close),
+                             abs(kl[i].low - kl[i-1].close))
+            }
+        }
+        var out = [Double](repeating: 0, count: n)
+        for i in p..<n {
+            var s = 0.0
+            for j in (i - p + 1)...i { s += trs[j] }
+            out[i] = s / Double(p)
+        }
+        return out
+    }
+
+    // RSI：SMA 型（回测 optimize.rsi：每个 i 重算窗口均值）
+    private static func rsiSMA(_ closes: [Double], _ p: Int = 14) -> [Double] {
+        let n = closes.count
+        var out = [Double](repeating: 0, count: n)
+        guard n > p else { return out }
+        for i in p..<n {
+            var g = 0.0, l = 0.0
+            for j in (i - p + 1)...i {
+                let ch = closes[j] - closes[j-1]
+                if ch > 0 { g += ch } else { l += -ch }
+            }
+            out[i] = l == 0 ? 100 : 100 - 100 / (1 + g / l)
+        }
+        return out
+    }
+
+    // ADX：Wilder 平滑（回测 final6.adx）
+    private static func adx(_ kl: [Kline], _ p: Int = 14) -> [Double] {
+        let n = kl.count
+        var tr = [Double](repeating: 0, count: n)
+        var pdm = [Double](repeating: 0, count: n)
+        var mdm = [Double](repeating: 0, count: n)
+        for i in 1..<n {
+            let h = kl[i].high, l = kl[i].low, pc = kl[i-1].close
+            tr[i] = max(h - l, abs(h - pc), abs(l - pc))
+            let up = h - kl[i-1].high
+            let dn = kl[i-1].low - l
+            pdm[i] = (up > dn && up > 0) ? up : 0
+            mdm[i] = (dn > up && dn > 0) ? dn : 0
+        }
+        func wilder(_ arr: [Double]) -> [Double] {
+            var out = [Double](repeating: 0, count: n)
+            if n <= p { return out }
+            var s = 0.0
+            for j in 1...p { s += arr[j] }
+            out[p] = s
+            for i in (p + 1)..<n {
+                s = (s - s / Double(p)) + arr[i]
+                out[i] = s
+            }
+            return out
+        }
+        let atrW = wilder(tr), pdmW = wilder(pdm), mdmW = wilder(mdm)
+        var dx = [Double](repeating: 0, count: n)
+        for i in p..<n {
+            if atrW[i] == 0 { continue }
+            let pdi = pdmW[i] / atrW[i] * 100
+            let mdi = mdmW[i] / atrW[i] * 100
+            let s = pdi + mdi
+            dx[i] = s == 0 ? 0 : abs(pdi - mdi) / s * 100
+        }
+        var adxV = [Double](repeating: 0, count: n)
+        if n > p + p {
+            var s = 0.0
+            for j in p..<(p + p) { s += dx[j] }
+            adxV[p + p - 1] = s / Double(p)
+            for i in (p + p)..<n {
+                s = (s - s / Double(p)) + dx[i]
+                adxV[i] = s / Double(p)
+            }
+        }
+        return adxV
+    }
+
+    private static func precompute(_ data: [Kline]) -> Pre {
+        let opens = data.map { $0.open }
+        let highs = data.map { $0.high }
+        let lows = data.map { $0.low }
+        let closes = data.map { $0.close }
+        let n = closes.count
+        var chg = [Double](repeating: 0, count: n)
+        for i in 1..<n { chg[i] = (closes[i] - closes[i-1]) / closes[i-1] * 100 }
+        var chg5 = [Double](repeating: 0, count: n)
+        for i in 5..<n { chg5[i] = (closes[i] - closes[i-5]) / closes[i-5] * 100 }
+        var amp = [Double](repeating: 0, count: n)
+        for i in 0..<n { amp[i] = opens[i] > 0 ? (highs[i] - lows[i]) / opens[i] * 100 : 0 }
+        return Pre(opens: opens, highs: highs, lows: lows, closes: closes,
+                   ema9: emaArr(closes, 9), ema21: emaArr(closes, 21),
+                   ema50: emaArr(closes, 50), ema200: emaArr(closes, 200),
+                   rsi: rsiSMA(closes), atr: atrPy(data), adx: adx(data),
+                   chg5: chg5, chg: chg, amp: amp)
+    }
+
+    // MARK: - 因子 1：动量（回测 s_biga_gold）
+    private static func scoreMomentum(_ pre: Pre, _ i: Int) -> Double {
+        var s = 0.0
+        let c5 = pre.chg5[i]
+        if c5 < -15 { s += 40 }
+        else if c5 < -8 { s += 27 }
+        else if c5 <= 5 { s += 0 }
+        else if c5 <= 15 { s -= 13 }
+        else if c5 <= 25 { s -= 27 }
+        else { s -= 40 }
+        let o = pre.opens[i], c = pre.closes[i]
+        let amp = pre.amp[i]
+        let chg = pre.chg[i]
+        if chg > 0 && c > o && amp > 2.5 { s += 30 }
+        else if chg < 0 && c < o && amp > 2.5 { s -= 30 }
+        else if -3 < chg && chg < 0 { s += 10 }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - 因子 2：EMA排列（回测 s_ema_align）
+    private static func scoreEMA(_ pre: Pre, _ i: Int) -> Double {
+        if i < 50 { return 0 }
+        let e9 = pre.ema9[i], e21 = pre.ema21[i], e50 = pre.ema50[i]
+        var s = 0.0
+        if e9 > e21 && e21 > e50 { s += 30 }
+        if i >= 200 && e50 > pre.ema200[i] { s += 10 }
+        else if e9 < e21 && e21 < e50 { s -= 30 }
+        else { s += e9 > e21 ? 8 : -8 }
+        return s
+    }
+
+    // MARK: - 因子 3：波动状态（回测 atr_state）
+    private static func scoreVolState(_ pre: Pre, _ i: Int) -> Double {
+        if i < 21 { return 0 }
+        let a = pre.atr[i]
+        if a <= 0 { return 0 }
+        var sum = 0.0
+        for j in (i - 20)..<i { sum += pre.atr[j] }
+        let avg = sum / 20.0
+        if a > avg * 1.3 { return 30 }
+        if a < avg * 0.7 { return -15 }
+        return 0
+    }
+
+    // MARK: - 因子 4：RSI动量（回测 rsi_momentum）
+    private static func scoreRSIMom(_ pre: Pre, _ i: Int) -> Double {
+        if i < 2 { return 0 }
+        let d = pre.rsi[i] - pre.rsi[i-1]
+        if d > 5 { return 40 }
+        if d > 2 { return 20 }
+        if d < -5 { return -40 }
+        if d < -2 { return -20 }
+        return 0
+    }
+
+    // MARK: - 全序列评分 [Double]（回测 make_scores）
+    static func makeScores(_ data: [Kline]) -> [Double] {
+        guard data.count >= 60 else { return [] }
+        let pre = precompute(data)
+        let n = data.count
+        var out = [Double](repeating: 0, count: n)
+        for i in 0..<n {
+            let m = scoreMomentum(pre, i)
+            let e = scoreEMA(pre, i)
+            let v = scoreVolState(pre, i)
+            let r = scoreRSIMom(pre, i)
+            let total = (m * 1 + e * 1 + v * 2 + r * 2) / 6.0
+            out[i] = max(-100, min(100, total))
+        }
+        return out
+    }
+
+    // MARK: - 金银融合评分（UI 展示）
     static func composite(_ data: [Kline]) -> CompositeSignal {
         guard data.count >= 60 else {
             return CompositeSignal(score: 0, breakdown: [
                 SignalBreakdown(name: "数据不足", score: 0, weight: 1.0)
             ])
         }
-        
-        let ctaScore = scoreCTA(data)
-        let goldScore = scoreGold(data)
-        
-        let breakdowns = [
-            SignalBreakdown(name: "CTA期货评分", score: ctaScore, weight: 1.0),
-            SignalBreakdown(name: "黄金趋势分", score: goldScore, weight: 3.0)
-        ]
-        
-        var totalScore: Double = 0
-        for b in breakdowns {
-            totalScore += Double(b.score) * b.weight
-        }
-        totalScore = max(-100, min(100, totalScore / 4.0))
-        
-        return CompositeSignal(score: Int(totalScore.rounded()), breakdown: breakdowns)
+        let pre = precompute(data)
+        let i = data.count - 1
+        let m = scoreMomentum(pre, i)
+        let e = scoreEMA(pre, i)
+        let v = scoreVolState(pre, i)
+        let r = scoreRSIMom(pre, i)
+        let total = (m * 1 + e * 1 + v * 2 + r * 2) / 6.0
+        let score = Int(max(-100, min(100, total.rounded())))
+        return CompositeSignal(score: score, breakdown: [
+            SignalBreakdown(name: "动量", score: Int(m.rounded()), weight: 1.0),
+            SignalBreakdown(name: "EMA排列", score: Int(e.rounded()), weight: 1.0),
+            SignalBreakdown(name: "波动状态", score: Int(v.rounded()), weight: 2.0),
+            SignalBreakdown(name: "RSI动量", score: Int(r.rounded()), weight: 2.0)
+        ])
     }
-    
-    // MARK: - 引擎 1：CTA 期货官方综合评分（china-technical-analysis）
-    // MACD 30% + RSI 20% + MA 25% + 布林 10% + KDJ 15% → -100~+100
-    private static func scoreCTA(_ data: [Kline]) -> Int {
-        guard data.count >= 30 else { return 0 }
-        var s = 0.0
-        let close = data[data.count - 1].close
-        
-        // MACD 30%：DIF>DEA 且 DIF>0 +30 / DIF<DEA 且 DIF<0 -30
-        let macd = IndicatorEngine.macd(data)
-        if let dif = macd.dif.compactMap({ $0 }).last,
-           let dea = macd.dea.compactMap({ $0 }).last {
-            if dif > dea && dif > 0 { s += 30 }
-            else if dif < dea && dif < 0 { s -= 30 }
-        }
-        
-        // RSI 20%：<30 +20（超卖买）/ >70 -20（超买卖）
-        if let r = IndicatorEngine.rsi(data).compactMap({ $0 }).last {
-            if r < 30 { s += 20 }
-            else if r > 70 { s -= 20 }
-        }
-        
-        // MA 25%：价>MA5>MA10>MA20 +25 / 反向 -25
-        let ma5 = IndicatorEngine.ma(data, period: 5).compactMap { $0 }.last
-        let ma10 = IndicatorEngine.ma(data, period: 10).compactMap { $0 }.last
-        let ma20 = IndicatorEngine.ma(data, period: 20).compactMap { $0 }.last
-        if let m5 = ma5, let m10 = ma10, let m20 = ma20 {
-            if close > m5 && m5 > m10 && m10 > m20 { s += 25 }
-            else if close < m5 && m5 < m10 && m10 < m20 { s -= 25 }
-        }
-        
-        // 布林 10%：价≤下轨 +10 / 价≥上轨 -10
-        let boll = IndicatorEngine.bollinger(data)
-        if let up = boll.upper.compactMap({ $0 }).last,
-           let lo = boll.lower.compactMap({ $0 }).last {
-            if close <= lo { s += 10 }
-            else if close >= up { s -= 10 }
-        }
-        
-        // KDJ 15%：低位金叉(K上穿D且D<20) +15 / 高位死叉(K下穿D且D>80) -15
-        let kdj = IndicatorEngine.kdj(data)
-        let kArr = kdj.k.compactMap { $0 }
-        let dArr = kdj.d.compactMap { $0 }
-        if kArr.count >= 2, dArr.count >= 2 {
-            let k = kArr[kArr.count - 1], d = dArr[dArr.count - 1]
-            let pk = kArr[kArr.count - 2], pd = dArr[dArr.count - 2]
-            if pk <= pd && k > d && d < 20 { s += 15 }
-            else if pk >= pd && k < d && d > 80 { s -= 15 }
-        }
-        
-        return max(-100, min(100, Int(s.rounded())))
-    }
-    
-    // MARK: - 引擎 2：GoldAnalyzer 趋势分（aistockresearcher）
-    // 价>MA5>MA20 +0.4（反向-0.4）；MA20>MA60 +0.3（反向-0.3）；RSI(14) 40-60 +0.1 / >70 -0.2 / <30 +0.2 → ×100
-    private static func scoreGold(_ data: [Kline]) -> Int {
-        guard data.count >= 60 else { return 0 }
-        var s = 0.0
-        let close = data[data.count - 1].close
-        
-        let ma5 = IndicatorEngine.ma(data, period: 5).compactMap { $0 }.last
-        let ma20 = IndicatorEngine.ma(data, period: 20).compactMap { $0 }.last
-        let ma60 = IndicatorEngine.ma(data, period: 60).compactMap { $0 }.last
-        if let m5 = ma5, let m20 = ma20 {
-            if close > m5 && m5 > m20 { s += 0.4 }
-            else if close < m5 && m5 < m20 { s -= 0.4 }
-        }
-        if let m20 = ma20, let m60 = ma60 {
-            if m20 > m60 { s += 0.3 }
-            else { s -= 0.3 }
-        }
-        if let r = IndicatorEngine.rsi(data).compactMap({ $0 }).last {
-            if r >= 40 && r <= 60 { s += 0.1 }
-            else if r > 70 { s -= 0.2 }
-            else if r < 30 { s += 0.2 }
-        }
-        
-        return max(-100, min(100, Int((s * 100).rounded())))
-    }
-    
-    // MARK: - 逐根K线历史信号（追风揽月风格 · 吊灯双向止损）
-    /// 遍历每根K线，评分>20标「多」、<-20标「空」；反向信号触发平仓并开反向仓；
-    /// 止损：吊灯止损（Chandelier Exit）多头=持仓最高价−3×ATR(14)，空头=持仓最低价+3×ATR(14)；无固定止盈
+
+    // MARK: - 逐根K线历史信号（回测 run_v4：吊灯+移动止盈+反手）
+    /// 开仓：评分≥+18（ADX≥20）做多 / ≤-18 做空；持仓中评分反向过阈值 → 反手
+    /// 止损：多头 = max(入场-3ATR, 持仓最高-2×ATR)；空头 = min(入场+3ATR, 持仓最低+2×ATR)
+    /// 判定用收盘价（与回测 run_v4 一致）
     static func perCandleSignals(_ data: [Kline]) -> [SignalMarker] {
         guard data.count >= 60 else { return [] }
+        let pre = precompute(data)
+        let scores = makeScores(data)
+        guard scores.count == data.count else { return [] }
+
         var signals: [SignalMarker] = []
-        
-        var position: PositionDirection = .none   // 当前持仓
-        var entryStopLoss: Double = 0              // 当前吊灯止损价
-        var extremePrice: Double = 0               // 持仓期最高价（多头）/ 最低价（空头）
-        
-        // 预计算 ATR（吊灯止损用）
-        let atrValues = IndicatorEngine.atr(data, period: 14)
-        
-        for i in 59..<data.count {
-            let prefix = Array(data[0...i])
-            let cs = composite(prefix)
+        var position: PositionDirection = .none
+        var entry: Double = 0
+        var highest: Double = 0
+        var lowest: Double = 0
+
+        for i in 60..<data.count {
             let candle = data[i]
-            let score = cs.score
-            let close = candle.close
-            let atr = atrValues[i] ?? 0
-            
-            // 吊灯止损更新 + 止损检查
-            if position != .none, atr > 0 {
+            let px = candle.close
+            let a = pre.atr[i] > 0 ? pre.atr[i] : 1.0
+            let sc = scores[i]
+
+            if position != .none {
+                // 反手：反向信号过阈值 → 平仓并开反向仓
+                if position == .long && sc <= Double(config.shortThreshold) {
+                    signals.append(SignalMarker(
+                        candleIndex: i, type: .longClose, price: px,
+                        stopLoss: entry, stopTarget: px,
+                        strength: min(abs(Int(sc.rounded())), 100),
+                        source: "反向信号", timestamp: candle.timestamp
+                    ))
+                    signals.append(SignalMarker(
+                        candleIndex: i, type: .shortOpen, price: px,
+                        stopLoss: candle.high + config.chandelierATR * a, stopTarget: nil,
+                        strength: min(abs(Int(sc.rounded())), 100),
+                        source: "追风揽月", timestamp: candle.timestamp
+                    ))
+                    position = .short; entry = px; lowest = candle.low
+                    continue
+                }
+                if position == .short && sc >= Double(config.longThreshold) {
+                    signals.append(SignalMarker(
+                        candleIndex: i, type: .shortClose, price: px,
+                        stopLoss: entry, stopTarget: px,
+                        strength: min(abs(Int(sc.rounded())), 100),
+                        source: "反向信号", timestamp: candle.timestamp
+                    ))
+                    signals.append(SignalMarker(
+                        candleIndex: i, type: .longOpen, price: px,
+                        stopLoss: candle.low - config.chandelierATR * a, stopTarget: nil,
+                        strength: min(abs(Int(sc.rounded())), 100),
+                        source: "追风揽月", timestamp: candle.timestamp
+                    ))
+                    position = .long; entry = px; highest = candle.high
+                    continue
+                }
+
                 if position == .long {
-                    extremePrice = max(extremePrice, candle.high)
-                    entryStopLoss = extremePrice - config.chandelierATR * atr
-                    if close <= entryStopLoss {
+                    highest = max(highest, candle.high)
+                    var stop = entry - config.chandelierATR * a
+                    if config.useBreakEven && (highest - entry) > 1.0 * a {
+                        stop = max(stop, entry)
+                    }
+                    let line = max(stop, highest - config.trailATR * a)
+                    if px <= line {
                         signals.append(SignalMarker(
-                            candleIndex: i,
-                            type: .longClose,
-                            price: close,
-                            stopLoss: entryStopLoss,
-                            stopTarget: close,
-                            strength: 100,
-                            source: "吊灯止损",
-                            timestamp: candle.timestamp
+                            candleIndex: i, type: .longClose, price: px,
+                            stopLoss: line, stopTarget: px,
+                            strength: 100, source: "止盈止损", timestamp: candle.timestamp
                         ))
                         position = .none
                     }
                 } else {
-                    extremePrice = min(extremePrice, candle.low)
-                    entryStopLoss = extremePrice + config.chandelierATR * atr
-                    if close >= entryStopLoss {
+                    lowest = min(lowest, candle.low)
+                    var stop = entry + config.chandelierATR * a
+                    if config.useBreakEven && (entry - lowest) >= 1.0 * a {
+                        stop = min(stop, entry)
+                    }
+                    let line = min(stop, lowest + config.trailATR * a)
+                    if px >= line {
                         signals.append(SignalMarker(
-                            candleIndex: i,
-                            type: .shortClose,
-                            price: close,
-                            stopLoss: entryStopLoss,
-                            stopTarget: close,
-                            strength: 100,
-                            source: "吊灯止损",
-                            timestamp: candle.timestamp
+                            candleIndex: i, type: .shortClose, price: px,
+                            stopLoss: line, stopTarget: px,
+                            strength: 100, source: "止盈止损", timestamp: candle.timestamp
                         ))
                         position = .none
                     }
                 }
-            }
-            
-            // 开仓信号：只在状态转换时开仓（避免同一持仓周期内重复发信号 → 徽章爆炸）
-            if position != .long && score >= config.longThreshold {
-                // 反向持仓 → 先平仓（出现反向信号即平仓）
-                if position == .short {
+            } else {
+                // ADX 过滤（仅开仓；回测 run_v4 同款）
+                if pre.adx[i] < config.adxMin { continue }
+                if sc >= Double(config.longThreshold) {
+                    let sl = candle.low - config.chandelierATR * a
                     signals.append(SignalMarker(
-                        candleIndex: i,
-                        type: .shortClose,
-                        price: close,
-                        stopLoss: entryStopLoss,
-                        stopTarget: close,
-                        strength: min(abs(score), 100),
-                        source: "反向信号",
-                        timestamp: candle.timestamp
+                        candleIndex: i, type: .longOpen, price: px,
+                        stopLoss: sl, stopTarget: nil,
+                        strength: min(Int(sc.rounded()), 100),
+                        source: "追风揽月", timestamp: candle.timestamp
                     ))
-                }
-                let sl = candle.low - config.chandelierATR * (atr > 0 ? atr : 0)
-                signals.append(SignalMarker(
-                    candleIndex: i,
-                    type: .longOpen,
-                    price: close,
-                    stopLoss: sl,
-                    stopTarget: nil,
-                    strength: min(score, 100),
-                    source: "追风揽月",
-                    timestamp: candle.timestamp
-                ))
-                position = .long
-                entryStopLoss = sl
-                extremePrice = candle.high
-                
-            } else if position != .short && score <= config.shortThreshold {
-                // 反向持仓 → 先平仓
-                if position == .long {
+                    position = .long; entry = px; highest = candle.high
+                } else if sc <= Double(config.shortThreshold) {
+                    let sl = candle.high + config.chandelierATR * a
                     signals.append(SignalMarker(
-                        candleIndex: i,
-                        type: .longClose,
-                        price: close,
-                        stopLoss: entryStopLoss,
-                        stopTarget: close,
-                        strength: min(abs(score), 100),
-                        source: "反向信号",
-                        timestamp: candle.timestamp
+                        candleIndex: i, type: .shortOpen, price: px,
+                        stopLoss: sl, stopTarget: nil,
+                        strength: min(abs(Int(sc.rounded())), 100),
+                        source: "追风揽月", timestamp: candle.timestamp
                     ))
+                    position = .short; entry = px; lowest = candle.low
                 }
-                let sl = candle.high + config.chandelierATR * (atr > 0 ? atr : 0)
-                signals.append(SignalMarker(
-                    candleIndex: i,
-                    type: .shortOpen,
-                    price: close,
-                    stopLoss: sl,
-                    stopTarget: nil,
-                    strength: min(abs(score), 100),
-                    source: "追风揽月",
-                    timestamp: candle.timestamp
-                ))
-                position = .short
-                entryStopLoss = sl
-                extremePrice = candle.low
             }
         }
-        
+
         return signals
     }
-    
+
     // MARK: - 实时信号（最后一根K线）
-    /// 实时评分达到阈值时返回信号，否则 nil。价格用实时价（K线未走完时 close 滞后，图标会画偏）
+    /// 评分 ≥ +18（ADX≥20）→ 做多；≤ -18 → 做空；否则 nil
     static func realtimeSignal(_ data: [Kline], livePrice: Double? = nil) -> (marker: SignalMarker?, score: Int) {
-        guard data.count >= 60, let last = data.last else {
-            return (nil, 0)
-        }
-        
-        let cs = composite(data)
-        let score = cs.score
-        let candle = last
-        // 实时价优先，无则回退K线close
-        let close = livePrice ?? candle.close
-        let atr = IndicatorEngine.atr(data, period: 14).compactMap { $0 }.last ?? 0
-        
-        guard score >= config.longThreshold || score <= config.shortThreshold else {
-            return (nil, score)
-        }
-        
-        if score >= config.longThreshold {
-            let sl = candle.low - config.chandelierATR * atr
+        guard data.count >= 60, let last = data.last else { return (nil, 0) }
+        let pre = precompute(data)
+        let scores = makeScores(data)
+        guard scores.count == data.count else { return (nil, 0) }
+        let sc = scores[data.count - 1]
+        let scoreInt = Int(max(-100, min(100, sc.rounded())))
+        let close = livePrice ?? last.close
+        let a = pre.atr[data.count - 1] > 0 ? pre.atr[data.count - 1] : 0
+
+        guard abs(sc) >= Double(config.longThreshold) else { return (nil, scoreInt) }
+        guard pre.adx[data.count - 1] >= config.adxMin else { return (nil, scoreInt) }
+
+        if sc >= Double(config.longThreshold) {
+            let sl = last.low - config.chandelierATR * a
             return (SignalMarker(
-                candleIndex: data.count - 1,
-                type: .longOpen,
-                price: close,
-                stopLoss: sl,
-                stopTarget: nil,
-                strength: min(score, 100),
-                source: "实时信号",
-                timestamp: candle.timestamp
-            ), score)
+                candleIndex: data.count - 1, type: .longOpen, price: close,
+                stopLoss: sl, stopTarget: nil,
+                strength: min(scoreInt, 100), source: "实时信号", timestamp: last.timestamp
+            ), scoreInt)
         }
-        
-        let sl = candle.high + config.chandelierATR * atr
+        let sl = last.high + config.chandelierATR * a
         return (SignalMarker(
-            candleIndex: data.count - 1,
-            type: .shortOpen,
-            price: close,
-            stopLoss: sl,
-            stopTarget: nil,
-            strength: min(abs(score), 100),
-            source: "实时信号",
-            timestamp: candle.timestamp
-        ), score)
+            candleIndex: data.count - 1, type: .shortOpen, price: close,
+            stopLoss: sl, stopTarget: nil,
+            strength: min(abs(scoreInt), 100), source: "实时信号", timestamp: last.timestamp
+        ), scoreInt)
     }
 }

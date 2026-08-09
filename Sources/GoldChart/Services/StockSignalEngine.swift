@@ -1,316 +1,293 @@
 import Foundation
 
-// MARK: - A股信号引擎（timing + 23指标，1:3 权重，只做多）
-// 评分公式（A股回测定稿 B 方案，超哥确认）：
-//   timing = 择时引擎（MA5/10/20 排列 + MA20斜率 + MACD柱 + 顶底背离）
-//   23指标 = stock-analysis-23 提炼四维（趋势共振 + MACD增强 + RSI/KDJ共振 + 布林带）
-//   融合 = (timing×1 + 23指标×3) / 4 → -100~+100，阈值 ±30
-// 追风揽月规则（A股散户不能做空 → 只做多）：
-//   评分 ≥ +30 → 开多；吊灯止损：持仓最高价 − 3×ATR(14)；无固定止盈
-//   评分 ≤ −30 → 平多（离场观望），不开空
+// MARK: - A股信号引擎 v2（矩阵回测定稿 · 2026-08-09）
+// 回测基准（474 只 × 严格7窗样本外 +397%、7窗全正；全样本 +587% 回撤-21%）：
+//   信号：趋势组共振（M001趋势共振 + M002波段王 + M005智能均线 + M023多周期共振）
+//         共振计数：|指标分|≥25 计 1 票，同向票数/4×100 → -100~+100
+//   开仓：评分 ≥ +20 开多（只做多）
+//   出场：吊灯 3×ATR 与 移动止盈 max(入场-3ATR, 持仓最高-2.5×ATR)（保本关 BE0）
+//   成交：止损用最低价触线（matrix single_daily_rets l[i]<=stop 逻辑）
+// 算法与 /tmp/bt/matrix_engine.py + matrix_mp.py 1:1 对齐
 class StockSignalEngine {
 
-    // MARK: - 配置
+    // MARK: - 配置（矩阵回测定稿参数）
     struct Config {
-        var longThreshold: Int = 30      // 评分 ≥ 30 做多
-        var exitThreshold: Int = -30     // 评分 ≤ -30 平多离场
-        var chandelierATR: Double = 3.0  // 吊灯止损 ATR 倍数
+        var longThreshold: Int = 20        // 评分 ≥ 20 开多
+        var chandelierATR: Double = 3.0    // 吊灯止损 ATR 倍数
+        var trailATR: Double = 2.5         // 移动止盈 ATR 倍数
+        var useBreakEven: Bool = false     // 保本开关（回测 BE0 → false）
+        var minAbs: Double = 25.0          // 共振计数阈值（|指标分|≥25 算一票）
 
         static let `default` = Config()
     }
 
     static var config = Config.default
 
-    // MARK: - 融合评分 (timing×1 + 23指标×3) / 4
+    // MARK: - 预计算（与 matrix_engine.compute_indicators 1:1）
+    private struct Pre {
+        let closes: [Double]
+        let ma5: [Double]
+        let ma10: [Double]
+        let ma20: [Double]
+        let ema20: [Double]
+        let hh20: [Double]
+        let ll20: [Double]
+        let atr: [Double]        // nan 用均值填充后的 ATR14
+        let vr: [Double]         // 20日量比
+        let wk5: [Double]        // 周线近似 = sma(close,5)
+        let ma5Slope: [Double]   // np.gradient(ma5)
+        let ema20Slope: [Double] // np.gradient(ema20)
+    }
+
+    private static func sma(_ vals: [Double], _ p: Int) -> [Double] {
+        let n = vals.count
+        var out = [Double](repeating: 0, count: n)
+        guard n >= p else { return out }
+        var s = 0.0
+        for i in 0..<n {
+            s += vals[i]
+            if i >= p { s -= vals[i - p] }
+            if i >= p - 1 { out[i] = s / Double(p) }
+        }
+        return out
+    }
+
+    // EMA：种子 = 首根 close（回测 optimize.ema）
+    private static func emaRec(_ vals: [Double], _ p: Int) -> [Double] {
+        var out = [Double](repeating: 0, count: vals.count)
+        guard !vals.isEmpty, p > 0 else { return out }
+        let k = 2.0 / Double(p + 1)
+        var e = vals[0]
+        out[0] = e
+        for i in 1..<vals.count {
+            e = vals[i] * k + e * (1 - k)
+            out[i] = e
+        }
+        return out
+    }
+
+    // numpy.gradient 等价：内部中心差分，端点单向差分
+    private static func gradient(_ x: [Double]) -> [Double] {
+        let n = x.count
+        guard n > 1 else { return [Double](repeating: 0, count: n) }
+        var g = [Double](repeating: 0, count: n)
+        g[0] = x[1] - x[0]
+        g[n - 1] = x[n - 1] - x[n - 2]
+        for i in 1..<(n - 1) {
+            g[i] = (x[i + 1] - x[i - 1]) / 2.0
+        }
+        return g
+    }
+
+    private static func precompute(_ data: [Kline]) -> Pre {
+        let closes = data.map { $0.close }
+        let n = closes.count
+        let ma5 = sma(closes, 5)
+        let ma10 = sma(closes, 10)
+        let ma20 = sma(closes, 20)
+        let ema20 = emaRec(closes, 20)
+
+        // ATR14（matrix_engine 用 O.atr，SMA of TR，含首日 H-L）
+        var trs = [Double](repeating: 0, count: n)
+        for i in 0..<n {
+            if i == 0 {
+                trs[i] = data[i].high - data[i].low
+            } else {
+                trs[i] = max(data[i].high - data[i].low,
+                             abs(data[i].high - data[i-1].close),
+                             abs(data[i].low - data[i-1].close))
+            }
+        }
+        var atr14 = [Double](repeating: 0, count: n)
+        for i in 14..<n {
+            var s = 0.0
+            for j in (i - 13)...i { s += trs[j] }
+            atr14[i] = s / 14.0
+        }
+        // nan → 均值填充（matrix_engine: np.nanmean(atr)）
+        var validSum = 0.0, validCount = 0
+        for i in 14..<n where atr14[i] > 0 { validSum += atr14[i]; validCount += 1 }
+        let fill = validCount > 0 ? validSum / Double(validCount) : 1.0
+        var atr = atr14
+        for i in 0..<n where atr[i] <= 0 { atr[i] = fill }
+
+        // 20日高低点
+        var hh20 = [Double](repeating: 0, count: n)
+        var ll20 = [Double](repeating: 0, count: n)
+        for i in 19..<n {
+            var hh = -Double.greatestFiniteMagnitude, ll = Double.greatestFiniteMagnitude
+            for j in (i - 19)...i {
+                hh = max(hh, data[j].high)
+                ll = min(ll, data[j].low)
+            }
+            hh20[i] = hh; ll20[i] = ll
+        }
+
+        // 量比 vr = vol / ma20(vol)（matrix: convolve same，前19根 nan→1.0）
+        var vma = [Double](repeating: 0, count: n)
+        var vsum = 0.0
+        for i in 0..<n {
+            vsum += data[i].volume
+            if i >= 20 { vsum -= data[i - 20].volume }
+            if i >= 19 { vma[i] = vsum / 20.0 }
+        }
+        var vr = [Double](repeating: 1.0, count: n)
+        for i in 19..<n where vma[i] > 0 { vr[i] = data[i].volume / vma[i] }
+
+        let wk5 = sma(closes, 5)
+        let ma5Slope = gradient(ma5)
+        let ema20Slope = gradient(ema20)
+
+        return Pre(closes: closes, ma5: ma5, ma10: ma10, ma20: ma20, ema20: ema20,
+                   hh20: hh20, ll20: ll20, atr: atr, vr: vr, wk5: wk5,
+                   ma5Slope: ma5Slope, ema20Slope: ema20Slope)
+    }
+
+    // MARK: - M001 趋势共振（sig_m001）
+    private static func sigM001(_ pre: Pre, _ i: Int) -> Double {
+        let c = pre.closes[i], m5 = pre.ma5[i], m10 = pre.ma10[i], m20 = pre.ma20[i]
+        var s = 0.0
+        let bull = c > m5 && m5 > m10 && m10 > m20
+        let bear = c < m5 && m5 < m10 && m10 < m20
+        let midb = m5 > m10 && m10 > m20
+        let midbe = m5 < m10 && m10 < m20
+        if bull { s += 60 } else if bear { s -= 60 }
+        if midb { s += 30 } else if midbe { s -= 30 }
+        if pre.ma5Slope[i] > 0 { s += 20 } else if pre.ma5Slope[i] < 0 { s -= 20 }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - M002 波段王（sig_m002）
+    private static func sigM002(_ pre: Pre, _ i: Int) -> Double {
+        let c = pre.closes[i]
+        let hh = pre.hh20[i], ll = pre.ll20[i]
+        let atr = pre.atr[i]
+        let vr = pre.vr[i]
+        var s = 0.0
+        if c > hh - 0.5 * atr {
+            s += 50
+            if vr > 1.5 { s += 30 }
+        } else if c < ll + 0.5 * atr {
+            s -= 50
+            if vr > 1.5 { s -= 30 }
+        }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - M005 智能均线（sig_m005）
+    private static func sigM005(_ pre: Pre, _ i: Int) -> Double {
+        let c = pre.closes[i], e = pre.ema20[i]
+        var s = 0.0
+        if c > e { s += 40 } else { s -= 40 }
+        if i >= 1 {
+            let pc = pre.closes[i - 1], pe = pre.ema20[i - 1]
+            if c > e && pc <= pe { s += 30 }
+            if c < e && pc >= pe { s -= 30 }
+        }
+        if pre.ema20Slope[i] > 0 { s += 20 } else if pre.ema20Slope[i] < 0 { s -= 20 }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - M023 多周期共振（sig_m023）
+    private static func sigM023(_ pre: Pre, _ i: Int) -> Double {
+        let c = pre.closes[i], m5 = pre.ma5[i], wk5 = pre.wk5[i]
+        var s = 0.0
+        let b1 = c > m5 && m5 > wk5
+        let b2 = c < m5 && m5 < wk5
+        if b1 { s += 60 } else if b2 { s -= 60 }
+        if c > m5 && !b1 { s += 25 } else if c < m5 && !b2 { s -= 25 }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - 趋势组共振评分（group_score：趋势组 4 指标，min_abs=25）
+    static func makeScores(_ data: [Kline]) -> [Double] {
+        guard data.count >= 60 else { return [] }
+        let pre = precompute(data)
+        let n = data.count
+        var out = [Double](repeating: 0, count: n)
+        for i in 0..<n {
+            var pos = 0.0, neg = 0.0
+            let scores: [Double] = [sigM001(pre, i), sigM002(pre, i), sigM005(pre, i), sigM023(pre, i)]
+            for v in scores {
+                if v >= config.minAbs { pos += 1 }
+                else if v <= -config.minAbs { neg += 1 }
+            }
+            out[i] = (pos - neg) / 4.0 * 100.0
+        }
+        return out
+    }
+
+    // MARK: - A股融合评分（UI 展示）
     static func composite(_ data: [Kline]) -> CompositeSignal {
         guard data.count >= 60 else {
             return CompositeSignal(score: 0, breakdown: [
                 SignalBreakdown(name: "数据不足", score: 0, weight: 1.0)
             ])
         }
-
-        let timingScore = scoreTiming(data)
-        let s23Score = scoreS23(data)
-
-        let breakdowns = [
-            SignalBreakdown(name: "择时timing", score: timingScore, weight: 1.0),
-            SignalBreakdown(name: "23指标", score: s23Score, weight: 3.0)
-        ]
-
-        var totalScore: Double = 0
-        for b in breakdowns {
-            totalScore += Double(b.score) * b.weight
+        let pre = precompute(data)
+        let i = data.count - 1
+        let m1 = sigM001(pre, i), m2 = sigM002(pre, i), m5 = sigM005(pre, i), m23 = sigM023(pre, i)
+        var pos = 0.0, neg = 0.0
+        for v in [m1, m2, m5, m23] {
+            if v >= config.minAbs { pos += 1 }
+            else if v <= -config.minAbs { neg += 1 }
         }
-        totalScore = max(-100, min(100, totalScore / 4.0))
-
-        return CompositeSignal(score: Int(totalScore.rounded()), breakdown: breakdowns)
+        let total = (pos - neg) / 4.0 * 100.0
+        let score = Int(max(-100, min(100, total.rounded())))
+        return CompositeSignal(score: score, breakdown: [
+            SignalBreakdown(name: "M001趋势共振", score: Int(m1.rounded()), weight: 1.0),
+            SignalBreakdown(name: "M002波段王", score: Int(m2.rounded()), weight: 1.0),
+            SignalBreakdown(name: "M005智能均线", score: Int(m5.rounded()), weight: 1.0),
+            SignalBreakdown(name: "M023多周期", score: Int(m23.rounded()), weight: 1.0)
+        ])
     }
 
-    // MARK: - 引擎 1：择时 timing（s_timing 照抄）
-    // ① MA5/10/20 排列 + MA20 斜率（5日）：多头排列+60/+30，空头排列-60/-30，否则 ±20
-    // ② MACD 柱：>0 且升 +24 / >0 降 +8 / <0 升 -8 / <0 降 -24
-    // ③ 顶底背离（30日窗口）：底背离 +16 / 顶背离 -16
-    private static func scoreTiming(_ data: [Kline]) -> Int {
-        guard data.count >= 60 else { return 0 }
-        let n = data.count
-        let i = n - 1
-
-        var s = 0.0
-
-        // ① 均线排列（数组保留 nil 占位，与回测下标对齐）
-        let m5 = IndicatorEngine.ma(data, period: 5)
-        let m10 = IndicatorEngine.ma(data, period: 10)
-        let m20 = IndicatorEngine.ma(data, period: 20)
-        guard let v5 = val(m5, i), let v10 = val(m10, i), let v20 = val(m20, i) else { return 0 }
-        // MA20 斜率 = ma20[i] - ma20[i-5]
-        let slope20 = (i >= 5) ? ((val(m20, i) ?? 0) - (val(m20, i - 5) ?? 0)) : 0
-        let bull = v5 > v10 && v10 > v20
-        let bear = v5 < v10 && v10 < v20
-        if bull {
-            s += slope20 > 0 ? 60 : 30
-        } else if bear {
-            s += slope20 < 0 ? -60 : -30
-        } else if v5 > v20 {
-            s += 20
-        } else if v5 < v20 {
-            s -= 20
-        }
-
-        // ② MACD 柱
-        let hist = IndicatorEngine.macd(data).histogram
-        if let h = val(hist, i) {
-            let ph = (i >= 1) ? (val(hist, i - 1) ?? h) : h
-            if h > 0 {
-                s += h > ph ? 24 : 8
-            } else {
-                s += h > ph ? -8 : -24
-            }
-        }
-
-        // ③ 顶底背离（30日窗口，照抄回测 divergence）
-        let closes = data.map { $0.close }
-        let lookback = 30
-        if i >= lookback {
-            let seg = Array(closes[(i - lookback)...i])
-            let cur = closes[i]
-            // 底背离
-            if let segMin = seg.min(), cur <= segMin * 1.001 {
-                for j in max(5, i - lookback)..<(i - 3) {
-                    if let hj = val(hist, j), hj < 0, let hi = val(hist, i), hi > hj {
-                        if closes[i] < closes[j] {
-                            s += 16
-                            break
-                        }
-                    }
-                }
-            }
-            // 顶背离
-            if let segMax = seg.max(), cur >= segMax * 0.999 {
-                for j in max(5, i - lookback)..<(i - 3) {
-                    if let hj = val(hist, j), hj > 0, let hi = val(hist, i), hi < hj {
-                        if closes[i] > closes[j] {
-                            s -= 16
-                            break
-                        }
-                    }
-                }
-            }
-        }
-
-        return max(-100, min(100, Int(s.rounded())))
-    }
-
-    // MARK: - 引擎 2：23指标四维（s_23 照抄，等权平均）
-    // M001 趋势共振：MA5>10>20>60 +100 / 反向 -100 / MA5>10>20 +60 / 反向 -60
-    // M010 MACD增强：背离 ±50 + 金叉死叉 ±50 + 柱 ±20
-    // M011/12 RSI+KDJ共振：RSI≤30且K≤20 +100 / RSI≥70且K≥80 -100 / 单边 ±50 / KDJ上行 ±30
-    // M013 布林带：价≤下轨且RSI<40 +100 / 价≤下轨×1.01 +60 / 价≥上轨且RSI>60 -100 / 价≥上轨×0.99 -60
-    private static func scoreS23(_ data: [Kline]) -> Int {
-        guard data.count >= 60 else { return 0 }
-        let n = data.count
-        let i = n - 1
-        let close = data[i].close
-
-        var scores: [Double] = []
-
-        // M001 趋势共振
-        let m5 = IndicatorEngine.ma(data, period: 5)
-        let m10 = IndicatorEngine.ma(data, period: 10)
-        let m20 = IndicatorEngine.ma(data, period: 20)
-        let m60 = IndicatorEngine.ma(data, period: 60)
-        if let a = val(m5, i), let b = val(m10, i), let c = val(m20, i), let d = val(m60, i) {
-            if a > b && b > c && c > d {
-                scores.append(100)
-            } else if a < b && b < c && c < d {
-                scores.append(-100)
-            } else if a > b && b > c {
-                scores.append(60)
-            } else if a < b && b < c {
-                scores.append(-60)
-            } else {
-                scores.append(0)
-            }
-        }
-
-        // M010 MACD（含背离）
-        let hist = IndicatorEngine.macd(data).histogram
-        if let h = val(hist, i) {
-            let ph = (i >= 1) ? (val(hist, i - 1) ?? h) : h
-            var sc = 0.0
-            // 背离（与 timing 同一逻辑）
-            let closes = data.map { $0.close }
-            let lookback = 30
-            if i >= lookback {
-                let seg = Array(closes[(i - lookback)...i])
-                let cur = closes[i]
-                if let segMin = seg.min(), cur <= segMin * 1.001 {
-                    for j in max(5, i - lookback)..<(i - 3) {
-                        if let hj = val(hist, j), hj < 0, let hi = val(hist, i), hi > hj, closes[i] < closes[j] {
-                            sc += 50
-                            break
-                        }
-                    }
-                }
-                if let segMax = seg.max(), cur >= segMax * 0.999 {
-                    for j in max(5, i - lookback)..<(i - 3) {
-                        if let hj = val(hist, j), hj > 0, let hi = val(hist, i), hi < hj, closes[i] > closes[j] {
-                            sc -= 50
-                            break
-                        }
-                    }
-                }
-            }
-            // 金叉死叉 + 柱
-            if h > 0 && ph <= 0 {
-                sc += 50
-            } else if h < 0 && ph >= 0 {
-                sc -= 50
-            } else if h > 0 {
-                sc += 20
-            } else if h < 0 {
-                sc -= 20
-            }
-            scores.append(max(-100, min(100, sc)))
-        }
-
-        // M011/12 RSI + KDJ 共振
-        let rsi = IndicatorEngine.rsi(data)
-        let kdj = IndicatorEngine.kdj(data)
-        if let r = val(rsi, i), let kk = val(kdj.k, i), let dd = val(kdj.d, i) {
-            var sc = 0.0
-            if r <= 30 && kk <= 20 {
-                sc += 100
-            } else if r >= 70 && kk >= 80 {
-                sc -= 100
-            } else if r <= 30 || kk <= 20 {
-                sc += 50
-            } else if r >= 70 || kk >= 80 {
-                sc -= 50
-            } else if i >= 1, let pk = val(kdj.k, i - 1), let pd = val(kdj.d, i - 1), kk > pk, dd > pd {
-                sc += 30
-            } else if i >= 1, let pk = val(kdj.k, i - 1), let pd = val(kdj.d, i - 1), kk < pk, dd < pd {
-                sc -= 30
-            }
-            scores.append(max(-100, min(100, sc)))
-        }
-
-        // M013 布林带
-        let boll = IndicatorEngine.bollinger(data)
-        if let up = val(boll.upper, i), let lo = val(boll.lower, i), let r = val(rsi, i) {
-            if close <= lo && r < 40 {
-                scores.append(100)
-            } else if close <= lo * 1.01 {
-                scores.append(60)
-            } else if close >= up && r > 60 {
-                scores.append(-100)
-            } else if close >= up * 0.99 {
-                scores.append(-60)
-            } else {
-                scores.append(0)
-            }
-        }
-
-        guard !scores.isEmpty else { return 0 }
-        return max(-100, min(100, Int((scores.reduce(0, +) / Double(scores.count)).rounded())))
-    }
-
-    // MARK: - 安全取值（保留 nil 占位的数组，与回测下标对齐）
-    private static func val(_ arr: [Double?], _ idx: Int) -> Double? {
-        guard idx >= 0, idx < arr.count else { return nil }
-        return arr[idx]
-    }
-
-    // MARK: - 逐根K线历史信号（只做多 · 吊灯止损）
-    /// 评分 ≥ +30 开多；评分 ≤ -30 平多离场（不开空）；吊灯止损 = 持仓最高价 − 3×ATR(14)
+    // MARK: - 逐根K线历史信号（matrix single_daily_rets 逻辑 · 只做多）
+    /// 开仓：评分 ≥ +20；止损线 = max(入场-3ATR, 持仓最高-2.5×ATR)（BE0 不启用保本）
+    /// 出场：最低价 ≤ 止损线（触线成交，与回测 l[i]<=stop 一致）
     static func perCandleSignals(_ data: [Kline]) -> [SignalMarker] {
         guard data.count >= 60 else { return [] }
+        let pre = precompute(data)
+        let scores = makeScores(data)
+        guard scores.count == data.count else { return [] }
+
         var signals: [SignalMarker] = []
+        var inPosition = false
+        var entry: Double = 0
+        var highest: Double = 0
 
-        var position: PositionDirection = .none
-        var entryStopLoss: Double = 0
-        var highestPrice: Double = 0
-
-        // 预计算 ATR
-        let atrValues = IndicatorEngine.atr(data, period: 14)
-
-        for i in 59..<data.count {
-            let prefix = Array(data[0...i])
-            let cs = composite(prefix)
+        for i in 1..<data.count {
             let candle = data[i]
-            let score = cs.score
-            let close = candle.close
-            let atr = atrValues[i] ?? 0
+            let a = pre.atr[i] > 0 ? pre.atr[i] : 1e-9
+            let sc = scores[i]
 
-            // 吊灯止损更新 + 止损检查（持仓中）
-            if position == .long, atr > 0 {
-                highestPrice = max(highestPrice, candle.high)
-                entryStopLoss = highestPrice - config.chandelierATR * atr
-                if close <= entryStopLoss {
-                    signals.append(SignalMarker(
-                        candleIndex: i,
-                        type: .longClose,
-                        price: close,
-                        stopLoss: entryStopLoss,
-                        stopTarget: close,
-                        strength: 100,
-                        source: "吊灯止损",
-                        timestamp: candle.timestamp
-                    ))
-                    position = .none
+            if inPosition {
+                highest = max(highest, candle.high)
+                var stop = entry - config.chandelierATR * a
+                if config.useBreakEven && (highest - entry) > 1.0 * a {
+                    stop = max(stop, entry)
                 }
-            }
-
-            // 平多离场：评分 ≤ -30（无持仓时不开空）
-            if position == .long && score <= config.exitThreshold {
-                signals.append(SignalMarker(
-                    candleIndex: i,
-                    type: .longClose,
-                    price: close,
-                    stopLoss: entryStopLoss,
-                    stopTarget: close,
-                    strength: min(abs(score), 100),
-                    source: "离场信号",
-                    timestamp: candle.timestamp
-                ))
-                position = .none
-            }
-
-            // 开多：评分 ≥ +30，空仓时开仓（避免持仓期内重复信号）
-            if position == .none && score >= config.longThreshold {
-                let sl = candle.low - config.chandelierATR * (atr > 0 ? atr : 0)
-                signals.append(SignalMarker(
-                    candleIndex: i,
-                    type: .longOpen,
-                    price: close,
-                    stopLoss: sl,
-                    stopTarget: nil,
-                    strength: min(score, 100),
-                    source: "追风揽月",
-                    timestamp: candle.timestamp
-                ))
-                position = .long
-                entryStopLoss = sl
-                highestPrice = candle.high
+                if config.trailATR > 0 {
+                    stop = max(stop, highest - config.trailATR * a)
+                }
+                if candle.low <= stop {
+                    signals.append(SignalMarker(
+                        candleIndex: i, type: .longClose, price: stop,
+                        stopLoss: stop, stopTarget: stop,
+                        strength: 100, source: "止盈止损", timestamp: candle.timestamp
+                    ))
+                    inPosition = false
+                }
+            } else {
+                if sc >= Double(config.longThreshold) {
+                    signals.append(SignalMarker(
+                        candleIndex: i, type: .longOpen, price: candle.close,
+                        stopLoss: candle.low - config.chandelierATR * a, stopTarget: nil,
+                        strength: min(Int(sc.rounded()), 100),
+                        source: "趋势共振", timestamp: candle.timestamp
+                    ))
+                    inPosition = true; entry = candle.close; highest = candle.high
+                }
             }
         }
 
@@ -318,32 +295,29 @@ class StockSignalEngine {
     }
 
     // MARK: - 实时信号（最后一根K线）
-    /// 实时评分 ≥ +30 返回做多信号，否则 nil。价格用实时价优先。
+    /// 评分 ≥ +20 返回做多信号，否则 nil
     static func realtimeSignal(_ data: [Kline], livePrice: Double? = nil) -> (marker: SignalMarker?, score: Int) {
-        guard data.count >= 60, let last = data.last else {
-            return (nil, 0)
+        guard data.count >= 60, let last = data.last else { return (nil, 0) }
+        let pre = precompute(data)
+        let i = data.count - 1
+        let m1 = sigM001(pre, i), m2 = sigM002(pre, i), m5 = sigM005(pre, i), m23 = sigM023(pre, i)
+        var pos = 0.0, neg = 0.0
+        for v in [m1, m2, m5, m23] {
+            if v >= config.minAbs { pos += 1 }
+            else if v <= -config.minAbs { neg += 1 }
         }
+        let total = (pos - neg) / 4.0 * 100.0
+        let score = Int(max(-100, min(100, total.rounded())))
+        let close = livePrice ?? last.close
 
-        let cs = composite(data)
-        let score = cs.score
-        let candle = last
-        let close = livePrice ?? candle.close
+        guard total >= Double(config.longThreshold) else { return (nil, score) }
 
-        guard score >= config.longThreshold else {
-            return (nil, score)
-        }
-
-        let atr = IndicatorEngine.atr(data, period: 14).compactMap { $0 }.last ?? 0
-        let sl = candle.low - config.chandelierATR * atr
+        let a = pre.atr[i] > 0 ? pre.atr[i] : 0
+        let sl = last.low - config.chandelierATR * a
         return (SignalMarker(
-            candleIndex: data.count - 1,
-            type: .longOpen,
-            price: close,
-            stopLoss: sl,
-            stopTarget: nil,
-            strength: min(score, 100),
-            source: "实时信号",
-            timestamp: candle.timestamp
+            candleIndex: i, type: .longOpen, price: close,
+            stopLoss: sl, stopTarget: nil,
+            strength: min(score, 100), source: "实时信号", timestamp: last.timestamp
         ), score)
     }
 }
