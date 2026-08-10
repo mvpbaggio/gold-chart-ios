@@ -29,6 +29,9 @@ final class SignalBadgeOverlayView: UIView {
         // 口袋式：可见区最高/最低价自动标注（价格标签 + 横虚线）
         drawExtremeLabels(ctx: ctx, chart: chart, transformer: transformer)
         
+        // build78：当前持仓的止盈线（横虚线+价格标签，实时跟随；多单红/空单绿）
+        drawTakeProfitLine(ctx: ctx, chart: chart, transformer: transformer)
+        
         // 图表徽章：开仓最近5个 + 止盈最近2个（分开取——保证「盈」徽章不被连续开仓信号挤掉）
         let entrySignals = vm.signalMarkers.filter { $0.type.isEntry }.suffix(5)
         let tpSignals = vm.signalMarkers.filter { $0.type.isTakeProfit }.suffix(2)
@@ -148,6 +151,56 @@ final class SignalBadgeOverlayView: UIView {
         ctx.setLineWidth(1)
         ctx.stroke(boxRect)
         // 价格文字居中
+        str.draw(at: CGPoint(x: boxRect.midX - textSize.width / 2, y: boxRect.midY - textSize.height / 2),
+                 withAttributes: attrs)
+    }
+    
+    // MARK: - build78：当前持仓止盈线（横虚线 + 价格标签）
+    /// 多单红虚线（持仓最高−2ATR）/ 空单绿虚线（持仓最低+2ATR），横跨可见区，右侧标签显示价格
+    /// 注意：overlay 的 klines 已是 CNY 换算，止盈线美元价需乘同一 factor 再投影
+    private func drawTakeProfitLine(ctx: CGContext, chart: CandleStickChartView, transformer: Transformer) {
+        guard let vm = viewModel, let tpUSD = vm.takeProfitLine else { return }
+        let factor = vm.useCNY ? vm.currentRate / ChartViewModel.gramPerOunce : 1.0
+        let tp = tpUSD * factor
+        let color: UIColor = vm.position == .long ? UIColor(AppColors.red) : UIColor(AppColors.green)
+        
+        let left = transformer.pixelForValues(x: Double(chart.lowestVisibleX), y: tp)
+        let right = transformer.pixelForValues(x: Double(chart.highestVisibleX), y: tp)
+        
+        // 横虚线（全宽）
+        ctx.saveGState()
+        ctx.setStrokeColor(color.withAlphaComponent(0.85).cgColor)
+        ctx.setLineWidth(1.2)
+        ctx.setLineDash(phase: 0, lengths: [6, 4])
+        ctx.move(to: CGPoint(x: left.x, y: left.y))
+        ctx.addLine(to: CGPoint(x: right.x, y: right.y))
+        ctx.strokePath()
+        ctx.restoreGState()
+        
+        // 右侧价格标签（「盈线」位置）
+        let text = String(format: "%.2f", tpUSD)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: 10),
+            .foregroundColor: color
+        ]
+        let str = text as NSString
+        let textSize = str.size(withAttributes: attrs)
+        let padX: CGFloat = 6, padY: CGFloat = 2
+        let boxW = textSize.width + padX * 2
+        let boxH = textSize.height + padY * 2
+        let chartWidth = chart.bounds.width
+        let chartHeight = chart.bounds.height
+        var boxX = chartWidth - boxW - 6
+        var labelY = left.y - boxH / 2
+        if labelY < 2 { labelY = 2 }
+        if labelY + boxH > chartHeight - 2 { labelY = chartHeight - boxH - 2 }
+        let boxRect = CGRect(x: boxX, y: labelY, width: boxW, height: boxH)
+        
+        ctx.setFillColor(UIColor.white.withAlphaComponent(0.92).cgColor)
+        ctx.fill(boxRect)
+        ctx.setStrokeColor(color.cgColor)
+        ctx.setLineWidth(1)
+        ctx.stroke(boxRect)
         str.draw(at: CGPoint(x: boxRect.midX - textSize.width / 2, y: boxRect.midY - textSize.height / 2),
                  withAttributes: attrs)
     }

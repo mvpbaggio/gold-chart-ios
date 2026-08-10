@@ -431,6 +431,42 @@ class SignalEngine {
         ), scoreInt)
     }
 
+    // MARK: - 当前持仓止盈线（build78：让止盈线看得见）
+    /// 返回当前持仓的移动止盈线价格（不触发也能拿到，供 UI 展示）：
+    ///   多单：持仓以来最高价 − trail×ATR；空单：持仓以来最低价 + trail×ATR
+    /// 与 realtimeTakeProfit 同一套逻辑，只计算不判断触发。无持仓/数据不足返回 nil
+    static func currentTakeProfitLine(
+        _ data: [Kline],
+        position: PositionDirection,
+        entryPrice: Double,
+        entryIndex: Int? = nil,
+        livePrice: Double? = nil
+    ) -> Double? {
+        guard position != .none, entryPrice > 0 else { return nil }
+        guard data.count >= 60, data.count > (entryIndex ?? 60) else { return nil }
+        let pre = precompute(data)
+        let a = pre.atr[data.count - 1]
+        guard a > 0 else { return nil }
+        let startIdx = max(60, entryIndex ?? 60)
+        let lp = livePrice ?? data[data.count - 1].close
+        switch position {
+        case .long:
+            var highest = entryPrice
+            for i in startIdx..<data.count { highest = max(highest, data[i].high) }
+            highest = max(highest, lp)
+            let line = highest - config.trailATR * a
+            return line < highest ? line : nil
+        case .short:
+            var lowest = entryPrice
+            for i in startIdx..<data.count { lowest = min(lowest, data[i].low) }
+            lowest = min(lowest, lp)
+            let line = lowest + config.trailATR * a
+            return line > lowest ? line : nil
+        case .none:
+            return nil
+        }
+    }
+
     // MARK: - 实时止盈提醒（移动止盈线触发，多空双向）
     /// 基于最近持仓以来的最高/最低价 + 2×ATR 移动止盈线：
     ///   多单：现价从持仓最高点回撤 ≥ trail×ATR → 止盈提醒

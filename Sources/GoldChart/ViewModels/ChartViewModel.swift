@@ -13,6 +13,10 @@ class ChartViewModel: ObservableObject {
     @Published var entryPrice: Double = 0
     @Published var pnl: Double = 0
     @Published var pnlPercent: Double = 0
+    /// build78：当前持仓的移动止盈线价格（无持仓/不可用时为 nil，供状态栏+图上线显示）
+    @Published var takeProfitLine: Double?
+    /// build78：现价距止盈线的距离（相对，正值=还差这么多；负值/接近=马上触发）
+    @Published var distanceToTP: Double?
     
     // 实时行情
     @Published var realTimeQuote: RealTimeQuote?
@@ -182,9 +186,21 @@ class ChartViewModel: ObservableObject {
         if st.position != .none, entryPrice > 0 {
             pnl = live - entryPrice
             pnlPercent = entryPrice > 0 ? (live - entryPrice) / entryPrice * 100 : 0
+            // build78：止盈线 + 距触发距离（实时更新）
+            takeProfitLine = SignalEngine.currentTakeProfitLine(
+                realtimeKlines, position: st.position, entryPrice: st.entryPrice,
+                entryIndex: st.entryIndex, livePrice: live
+            )
+            if let tp = takeProfitLine {
+                distanceToTP = st.position == .long ? tp - live : live - tp
+            } else {
+                distanceToTP = nil
+            }
         } else {
             pnl = 0
             pnlPercent = 0
+            takeProfitLine = nil
+            distanceToTP = nil
         }
         _ = score
         
@@ -294,8 +310,19 @@ class ChartViewModel: ObservableObject {
                 if st.position != .none, st.entryPrice > 0 {
                     pnl = live - st.entryPrice
                     pnlPercent = st.entryPrice > 0 ? (live - st.entryPrice) / st.entryPrice * 100 : 0
+                    // build78：止盈线 + 距触发距离
+                    takeProfitLine = SignalEngine.currentTakeProfitLine(
+                        fetched, position: st.position, entryPrice: st.entryPrice,
+                        entryIndex: st.entryIndex, livePrice: live
+                    )
+                    if let tp = takeProfitLine {
+                        distanceToTP = st.position == .long ? tp - live : live - tp
+                    } else {
+                        distanceToTP = nil
+                    }
                 } else {
                     pnl = 0; pnlPercent = 0
+                    takeProfitLine = nil; distanceToTP = nil
                 }
             }
         } catch {
@@ -320,8 +347,19 @@ class ChartViewModel: ObservableObject {
                 if st.position != .none, st.entryPrice > 0 {
                     pnl = live - st.entryPrice
                     pnlPercent = st.entryPrice > 0 ? (live - st.entryPrice) / st.entryPrice * 100 : 0
+                    // build78：止盈线 + 距触发距离
+                    takeProfitLine = SignalEngine.currentTakeProfitLine(
+                        mock, position: st.position, entryPrice: st.entryPrice,
+                        entryIndex: st.entryIndex, livePrice: live
+                    )
+                    if let tp = takeProfitLine {
+                        distanceToTP = st.position == .long ? tp - live : live - tp
+                    } else {
+                        distanceToTP = nil
+                    }
                 } else {
                     pnl = 0; pnlPercent = 0
+                    takeProfitLine = nil; distanceToTP = nil
                 }
             }
         }

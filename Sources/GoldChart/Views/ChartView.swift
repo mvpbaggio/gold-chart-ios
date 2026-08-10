@@ -203,6 +203,18 @@ struct ChartView: View {
                 Text("(\(viewModel.pnlPercent.percentString()))")
                     .font(.system(size: 11))
                     .foregroundColor(viewModel.pnlPercent >= 0 ? AppColors.red : AppColors.green)
+                
+                // build78：止盈线直接摆出来（回撤/反弹触发位置，实时跟随）
+                if let tp = viewModel.takeProfitLine {
+                    Text("盈线 \(tp.formattedPrice(viewModel.selectedProduct))")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(viewModel.position == .long ? AppColors.red : AppColors.green)
+                    if let dist = viewModel.distanceToTP {
+                        Text("距 \(abs(dist).formattedPrice(viewModel.selectedProduct))")
+                            .font(.system(size: 10))
+                            .foregroundColor(dist <= 0 ? AppColors.gold : AppColors.textTertiary)
+                    }
+                }
             }
             
             Spacer()
