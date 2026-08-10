@@ -31,6 +31,8 @@ class SearchViewModel: ObservableObject {
     @Published var stockScore: Int = 0
     @Published var stockComposite: CompositeSignal?
     @Published var favorites: [FavoriteStock] = []
+    /// 重置令牌：自选列表重建用（切回 A股 tab 时强制重建整棵树，避开详情页残留/搜索框残留）
+    @Published var resetToken = 0
     
     private static let favoritesKey = "stock_favorites"
     
@@ -85,6 +87,17 @@ class SearchViewModel: ObservableObject {
         selectStock(item)
     }
     
+    @MainActor
+    func resetToFavorites() {
+        // 切回 A股 tab 且不在搜索中：复位详情页 + 搜索框，保证自选列表可见
+        selectedStock = nil
+        stockKlines = []
+        isFetchingStock = false
+        query = ""
+        results = []
+        resetToken += 1
+    }
+
     // MARK: - 搜索与详情
     
     @MainActor

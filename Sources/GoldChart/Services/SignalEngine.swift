@@ -232,6 +232,16 @@ class SignalEngine {
         return out
     }
 
+    // MARK: - H动态空头阈值（超哥拍板 2026-08-10）
+    /// EMA50 下降趋势（当前 < 20根前）→ 空头阈值放宽到 -12，否则维持 -18
+    /// 回测 gold_dynamic_th.py：H 动态-12 空头 75 笔 -29.0% 合计 +219.2%（超哥选定）
+    private static func effectiveShortThreshold(_ pre: Pre, _ i: Int) -> Double {
+        if i >= 20 && pre.ema50[i] < pre.ema50[i - 20] {
+            return -12
+        }
+        return Double(config.shortThreshold)
+    }
+
     // MARK: - 金银融合评分（UI 展示）
     static func composite(_ data: [Kline]) -> CompositeSignal {
         guard data.count >= 60 else {
@@ -279,7 +289,7 @@ class SignalEngine {
 
             if position != .none {
                 // 反手：反向信号过阈值 → 平仓并开反向仓
-                if position == .long && sc <= Double(config.shortThreshold) {
+                if position == .long && sc <= effectiveShortThreshold(pre, i) {
                     signals.append(SignalMarker(
                         candleIndex: i, type: .longClose, price: px,
                         stopLoss: entry, stopTarget: px,
@@ -371,7 +381,7 @@ class SignalEngine {
                         source: "追风揽月", timestamp: candle.timestamp
                     ))
                     position = .long; entry = px; highest = candle.high
-                } else if sc <= Double(config.shortThreshold) {
+                } else if sc <= effectiveShortThreshold(pre, i) {
                     let sl = candle.high + config.chandelierATR * a
                     signals.append(SignalMarker(
                         candleIndex: i, type: .shortOpen, price: px,
@@ -398,11 +408,14 @@ class SignalEngine {
         let scoreInt = Int(max(-100, min(100, sc.rounded())))
         let close = livePrice ?? last.close
         let a = pre.atr[data.count - 1] > 0 ? pre.atr[data.count - 1] : 0
+        let i = data.count - 1
 
-        guard abs(sc) >= Double(config.longThreshold) else { return (nil, scoreInt) }
-        guard pre.adx[data.count - 1] >= config.adxMin else { return (nil, scoreInt) }
+        let effShort = effectiveShortThreshold(pre, i)
+        let thL = Double(config.longThreshold)
+        guard sc >= thL || sc <= effShort else { return (nil, scoreInt) }
+        guard pre.adx[i] >= config.adxMin else { return (nil, scoreInt) }
 
-        if sc >= Double(config.longThreshold) {
+        if sc >= thL {
             let sl = last.low - config.chandelierATR * a
             return (SignalMarker(
                 candleIndex: data.count - 1, type: .longOpen, price: close,
@@ -502,7 +515,7 @@ class SignalEngine {
 
             if position != .none {
                 // 反手
-                if position == .long && sc <= Double(config.shortThreshold) {
+                if position == .long && sc <= effectiveShortThreshold(pre, i) {
                     position = .short; entry = px; entryIndex = i; lowest = candle.low
                     continue
                 }
@@ -528,7 +541,7 @@ class SignalEngine {
                 if pre.adx[i] < config.adxMin { continue }
                 if sc >= Double(config.longThreshold) {
                     position = .long; entry = px; entryIndex = i; highest = candle.high
-                } else if sc <= Double(config.shortThreshold) {
+                } else if sc <= effectiveShortThreshold(pre, i) {
                     position = .short; entry = px; entryIndex = i; lowest = candle.low
                 }
             }

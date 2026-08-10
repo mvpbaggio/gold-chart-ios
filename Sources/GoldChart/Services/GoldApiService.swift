@@ -22,8 +22,22 @@ class GoldApiService {
     }
     
     /// 获取K线数据（自动回退）
+    /// 优先级（build77 超哥拍板）：
+    ///   分钟K(m1..h4)：Yahoo 期货优先（深度 1d-6mo，碾压东财现货分钟K 132根）→ 东财现货 → 代理 → 新浪1分聚合 → Mock
+    ///   日K/周K：东财现货（5000根深）→ 代理 → 新浪日K/周K → Mock
     func fetchKlines(product: ProductType, period: KlinePeriod, count: Int = 500) async throws -> [Kline] {
-        // 0. 东方财富现货（主源，全周期含历史分钟K/周K）
+        // 分钟K：Yahoo 期货主源（基差校准到现货价；H4由60m聚合）
+        if period != .d1, period != .w1 {
+            if let yahooResult = try? await fetchFromYahoo(product: product, period: period) {
+                let calibrated = (try? await calibrateToSpot(yahooResult, product: product)) ?? yahooResult
+                if period == .h4 {
+                    return aggregateToH4(calibrated)
+                }
+                return calibrated
+            }
+        }
+
+        // 0. 东方财富现货（日K/周K 主源；分钟K 兜底）
         if let emResult = try? await fetchFromEastMoney(product: product, period: period, count: count) {
             return emResult
         }
@@ -39,22 +53,13 @@ class GoldApiService {
                 return sinaResult
             }
         } else {
-            // 3. Yahoo 期货分钟K（GC=F/SI=F，深度 1d-6mo）+ 基差校准到现货价
-            //    ⚠️ 期货价与现货差~60美元，必须校准后再展示
-            if let yahooResult = try? await fetchFromYahoo(product: product, period: period) {
-                let calibrated = (try? await calibrateToSpot(yahooResult, product: product)) ?? yahooResult
-                if period == .h4 {
-                    return aggregateToH4(calibrated)
-                }
-                return calibrated
-            }
-            // 4. 新浪现货1分钟聚合（浅约1天，价格准确，Yahoo不通时兜底）
+            // 3. 新浪现货1分钟聚合（浅约1天，价格准确，Yahoo/东财不通时兜底）
             if let sinaResult = try? await fetchFromSina(product: product, period: period, count: count) {
                 return sinaResult
             }
         }
         
-        // 5. 模拟数据兜底（所有真实源失败时，保底显示）
+        // 4. 模拟数据兜底（所有真实源失败时，保底显示）
         let basePrice = product == .xau ? 4100.0 : 29.5
         return MockData.generateKlines(count: count, basePrice: basePrice)
     }

@@ -168,7 +168,7 @@ struct StockSearchView: View {
                     .padding(.vertical, 4)
                 }
                 .background(AppColors.background)
-                .id(viewModel.favorites)   // 集合变化 → 整棵重建，避开懒加载增量渲染 bug
+                .id("\(viewModel.favorites.count)-\(viewModel.resetToken)")   // 集合变化/切回tab → 整棵重建，避开懒加载增量渲染 bug
             }
         }
     }

@@ -29,16 +29,19 @@ final class SignalBadgeOverlayView: UIView {
         // 口袋式：可见区最高/最低价自动标注（价格标签 + 横虚线）
         drawExtremeLabels(ctx: ctx, chart: chart, transformer: transformer)
         
-        for sig in vm.signalMarkers.filter({ $0.type.isEntry || $0.type.isTakeProfit }).suffix(5) {
+        // 图表徽章：开仓最近5个 + 止盈最近2个（分开取——保证「盈」徽章不被连续开仓信号挤掉）
+        let entrySignals = vm.signalMarkers.filter { $0.type.isEntry }.suffix(5)
+        let tpSignals = vm.signalMarkers.filter { $0.type.isTakeProfit }.suffix(2)
+        for sig in Array(entrySignals) + Array(tpSignals) {
             guard sig.candleIndex < klines.count else { continue }
             let idx = sig.candleIndex
             // 多→最低点下方；空→最高点上方（偏移用固定像素 24pt，避免金价高位时偏移不可见）
             let anchorValue: Double
             let color: UIColor
             if sig.type.isTakeProfit {
-                // 止盈徽章：橙色，锚点在触发K线收盘价
+                // 止盈徽章：多单止盈红 / 空单止盈绿（超哥拍板 2026-08-10），锚点在触发K线收盘价
                 anchorValue = klines[idx].close
-                color = UIColor(AppColors.gold)
+                color = sig.type == .longTakeProfit ? UIColor(AppColors.red) : UIColor(AppColors.green)
             } else if sig.type == .longOpen {
                 anchorValue = klines[idx].low
                 color = UIColor(AppColors.red)

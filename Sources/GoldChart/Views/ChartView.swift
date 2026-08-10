@@ -290,10 +290,13 @@ struct ChartView: View {
     }
     
     // MARK: - 历史信号列表
+    /// 开仓最近5个 + 止盈最近2个（分开取——保证「盈」信号不被连续开仓挤掉）
     private var signalListView: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
+        let entrySignals = viewModel.signalMarkers.filter { $0.type.isEntry }.suffix(5)
+        let tpSignals = viewModel.signalMarkers.filter { $0.type.isTakeProfit }.suffix(2)
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                ForEach(viewModel.signalMarkers.suffix(5)) { signal in
+                ForEach(Array(entrySignals) + Array(tpSignals)) { signal in
                     VStack(alignment: .leading, spacing: 2) {
                         HStack(spacing: 2) {
                             Image(systemName: signal.type == .longOpen ? "arrowtriangle.up.fill" : "arrowtriangle.down.fill")

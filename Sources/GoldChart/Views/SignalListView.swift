@@ -168,11 +168,11 @@ struct SignalListView: View {
                     .fill(Color.white)
                     .frame(width: 34, height: 34)
                 Circle()
-                    .stroke(signal.type == .longOpen ? AppColors.red : (signal.type == .shortOpen ? AppColors.green : AppColors.gold), lineWidth: 2)
+                    .stroke(signal.type == .longOpen || signal.type == .longTakeProfit ? AppColors.red : (signal.type == .shortOpen || signal.type == .shortTakeProfit ? AppColors.green : AppColors.gold), lineWidth: 2)
                     .frame(width: 34, height: 34)
                 Text(signal.type.marker)
                     .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(signal.type == .longOpen ? AppColors.red : (signal.type == .shortOpen ? AppColors.green : AppColors.gold))
+                    .foregroundColor(signal.type == .longOpen || signal.type == .longTakeProfit ? AppColors.red : (signal.type == .shortOpen || signal.type == .shortTakeProfit ? AppColors.green : AppColors.gold))
             }
             
             VStack(alignment: .leading, spacing: 3) {

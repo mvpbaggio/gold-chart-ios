@@ -29,6 +29,14 @@ struct ContentView: View {
                         .tag(3)
                 }
                 .tabViewStyle(.page(indexDisplayMode: .never))
+                .onChange(of: selectedTab) { newTab in
+                    // 切回 A股 tab：复位自选列表（避免个股详情页残留挡住列表）
+                    if newTab == 2 {
+                        Task { @MainActor in
+                            searchVM.resetToFavorites()
+                        }
+                    }
+                }
                 
                 // 底部导航
                 bottomNav
