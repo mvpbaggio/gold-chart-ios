@@ -17,9 +17,15 @@ struct SignalMarker: Identifiable {
         case shortOpen = "空头开仓"
         case longClose = "多头平仓"
         case shortClose = "空头平仓"
+        case longTakeProfit = "多单止盈"
+        case shortTakeProfit = "空单止盈"
         
         var isEntry: Bool {
             self == .longOpen || self == .shortOpen
+        }
+        
+        var isTakeProfit: Bool {
+            self == .longTakeProfit || self == .shortTakeProfit
         }
         
         var isLong: Bool {
@@ -32,6 +38,8 @@ struct SignalMarker: Identifiable {
             case .shortOpen: return "空"
             case .longClose: return "平多"
             case .shortClose: return "平空"
+            case .longTakeProfit: return "盈"
+            case .shortTakeProfit: return "盈"
             }
         }
     }

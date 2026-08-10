@@ -320,6 +320,14 @@ class SignalEngine {
                     }
                     let line = max(stop, highest - config.trailATR * a)
                     if px <= line {
+                        // 有利离场（浮盈回撤触发移动止盈）→ 额外标“盈”
+                        if px > entry {
+                            signals.append(SignalMarker(
+                                candleIndex: i, type: .longTakeProfit, price: line,
+                                stopLoss: entry, stopTarget: px,
+                                strength: 90, source: "移动止盈", timestamp: candle.timestamp
+                            ))
+                        }
                         signals.append(SignalMarker(
                             candleIndex: i, type: .longClose, price: px,
                             stopLoss: line, stopTarget: px,
@@ -335,6 +343,14 @@ class SignalEngine {
                     }
                     let line = min(stop, lowest + config.trailATR * a)
                     if px >= line {
+                        // 有利离场（浮盈反弹触发移动止盈）→ 额外标“盈”
+                        if px < entry {
+                            signals.append(SignalMarker(
+                                candleIndex: i, type: .shortTakeProfit, price: line,
+                                stopLoss: entry, stopTarget: px,
+                                strength: 90, source: "移动止盈", timestamp: candle.timestamp
+                            ))
+                        }
                         signals.append(SignalMarker(
                             candleIndex: i, type: .shortClose, price: px,
                             stopLoss: line, stopTarget: px,
@@ -400,5 +416,123 @@ class SignalEngine {
             stopLoss: sl, stopTarget: nil,
             strength: min(abs(scoreInt), 100), source: "实时信号", timestamp: last.timestamp
         ), scoreInt)
+    }
+
+    // MARK: - 实时止盈提醒（移动止盈线触发，多空双向）
+    /// 基于最近持仓以来的最高/最低价 + 2×ATR 移动止盈线：
+    ///   多单：现价从持仓最高点回撤 ≥ trail×ATR → 止盈提醒
+    ///   空单：现价从持仓最低点反弹 ≥ trail×ATR → 止盈提醒
+    /// 返回 nil 表示未触发（或数据不足/无持仓）
+    static func realtimeTakeProfit(
+        _ data: [Kline],
+        position: PositionDirection,
+        entryPrice: Double,
+        livePrice: Double,
+        entryIndex: Int? = nil
+    ) -> SignalMarker? {
+        guard position != .none, entryPrice > 0 else { return nil }
+        guard data.count >= 60, let last = data.last else { return nil }
+        let pre = precompute(data)
+        let a = pre.atr[data.count - 1]
+        guard a > 0 else { return nil }
+
+        let startIdx = max(60, entryIndex ?? 60)
+        guard startIdx < data.count else { return nil }
+
+        switch position {
+        case .long:
+            // 持仓以来最高价（含实时价）
+            var highest = entryPrice
+            for i in startIdx..<data.count { highest = max(highest, data[i].high) }
+            highest = max(highest, livePrice)
+            let trailLine = highest - config.trailATR * a
+            if livePrice <= trailLine, trailLine < highest {
+                return SignalMarker(
+                    candleIndex: data.count - 1, type: .longTakeProfit, price: livePrice,
+                    stopLoss: entryPrice, stopTarget: trailLine,
+                    strength: 90, source: "实时止盈", timestamp: last.timestamp
+                )
+            }
+        case .short:
+            var lowest = entryPrice
+            for i in startIdx..<data.count { lowest = min(lowest, data[i].low) }
+            lowest = min(lowest, livePrice)
+            let trailLine = lowest + config.trailATR * a
+            if livePrice >= trailLine, trailLine > lowest {
+                return SignalMarker(
+                    candleIndex: data.count - 1, type: .shortTakeProfit, price: livePrice,
+                    stopLoss: entryPrice, stopTarget: trailLine,
+                    strength: 90, source: "实时止盈", timestamp: last.timestamp
+                )
+            }
+        case .none:
+            break
+        }
+        return nil
+    }
+
+    // MARK: - 当前持仓状态（引擎模拟到最后一根K线）
+    /// 与 perCandleSignals 同一套开仓/平仓/反手规则，只回传最后一根K线时的持仓状态
+    /// （供实时止盈提醒使用：多单回撤 2ATR / 空单反弹 2ATR → 弹“盈”）
+    struct PositionState {
+        let position: PositionDirection
+        let entryPrice: Double
+        let entryIndex: Int
+        let highest: Double
+        let lowest: Double
+    }
+
+    static func currentPositionState(_ data: [Kline]) -> PositionState {
+        guard data.count >= 60 else {
+            return PositionState(position: .none, entryPrice: 0, entryIndex: 0, highest: 0, lowest: 0)
+        }
+        let pre = precompute(data)
+        let scores = makeScores(data)
+        var position: PositionDirection = .none
+        var entry: Double = 0
+        var entryIndex = 0
+        var highest: Double = 0
+        var lowest: Double = 0
+
+        for i in 60..<data.count {
+            let candle = data[i]
+            let px = candle.close
+            let a = pre.atr[i] > 0 ? pre.atr[i] : 1.0
+            let sc = scores[i]
+
+            if position != .none {
+                // 反手
+                if position == .long && sc <= Double(config.shortThreshold) {
+                    position = .short; entry = px; entryIndex = i; lowest = candle.low
+                    continue
+                }
+                if position == .short && sc >= Double(config.longThreshold) {
+                    position = .long; entry = px; entryIndex = i; highest = candle.high
+                    continue
+                }
+                if position == .long {
+                    highest = max(highest, candle.high)
+                    var stop = entry - config.chandelierATR * a
+                    if config.useBreakEven && (highest - entry) > 1.0 * a { stop = max(stop, entry) }
+                    let line = max(stop, highest - config.trailATR * a)
+                    if px <= line { position = .none }
+                } else {
+                    lowest = min(lowest, candle.low)
+                    var stop = entry + config.chandelierATR * a
+                    if config.useBreakEven && (entry - lowest) >= 1.0 * a { stop = min(stop, entry) }
+                    let line = min(stop, lowest + config.trailATR * a)
+                    if px >= line { position = .none }
+                }
+            } else {
+                // ADX 过滤（仅开仓）
+                if pre.adx[i] < config.adxMin { continue }
+                if sc >= Double(config.longThreshold) {
+                    position = .long; entry = px; entryIndex = i; highest = candle.high
+                } else if sc <= Double(config.shortThreshold) {
+                    position = .short; entry = px; entryIndex = i; lowest = candle.low
+                }
+            }
+        }
+        return PositionState(position: position, entryPrice: entry, entryIndex: entryIndex, highest: highest, lowest: lowest)
     }
 }

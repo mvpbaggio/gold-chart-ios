@@ -172,12 +172,36 @@ class ChartViewModel: ObservableObject {
         compositeSignal = SignalEngine.composite(realtimeKlines)
         // 实时信号：达到阈值时添加/替换最后一根K线的信号
         guard realtimeKlines.count >= 60 else { return }
-        let (marker, _) = SignalEngine.realtimeSignal(realtimeKlines, livePrice: realTimeQuote?.price)
+        let live = realTimeQuote?.price ?? realtimeKlines.last?.close ?? 0
+        let (marker, score) = SignalEngine.realtimeSignal(realtimeKlines, livePrice: realTimeQuote?.price)
+        
+        // 更新当前持仓状态（引擎模拟）：供实时止盈提醒使用
+        let st = SignalEngine.currentPositionState(realtimeKlines)
+        position = st.position
+        entryPrice = st.entryPrice
+        if st.position != .none, entryPrice > 0 {
+            pnl = live - entryPrice
+            pnlPercent = entryPrice > 0 ? (live - entryPrice) / entryPrice * 100 : 0
+        } else {
+            pnl = 0
+            pnlPercent = 0
+        }
+        _ = score
+        
         let currentMarkers = signalMarkers
         // 移除同一根K线上的实时信号，避免重复
-        var filtered = currentMarkers.filter { $0.source != "实时信号" || $0.candleIndex < realtimeKlines.count - 1 }
+        var filtered = currentMarkers.filter { $0.source != "实时信号" && $0.source != "实时止盈" || $0.candleIndex < realtimeKlines.count - 1 }
         if let m = marker {
             filtered.append(m)
+        }
+        // 实时止盈提醒：持仓中价格回撤/反弹到 2×ATR 移动止盈线 → 加“盈”
+        if st.position != .none, live > 0 {
+            if let tp = SignalEngine.realtimeTakeProfit(
+                realtimeKlines, position: st.position, entryPrice: st.entryPrice,
+                livePrice: live, entryIndex: st.entryIndex
+            ) {
+                filtered.append(tp)
+            }
         }
         signalMarkers = filtered
     }
@@ -262,6 +286,17 @@ class ChartViewModel: ObservableObject {
                     markers.append(m)
                 }
                 signalMarkers = markers
+                // 初始化持仓状态（引擎模拟到最后一根K线）
+                let st = SignalEngine.currentPositionState(fetched)
+                position = st.position
+                entryPrice = st.entryPrice
+                let live = realTimeQuote?.price ?? fetched.last?.close ?? 0
+                if st.position != .none, st.entryPrice > 0 {
+                    pnl = live - st.entryPrice
+                    pnlPercent = st.entryPrice > 0 ? (live - st.entryPrice) / st.entryPrice * 100 : 0
+                } else {
+                    pnl = 0; pnlPercent = 0
+                }
             }
         } catch {
             errorMessage = error.localizedDescription
@@ -278,6 +313,16 @@ class ChartViewModel: ObservableObject {
                     markers.append(m)
                 }
                 signalMarkers = markers
+                let st = SignalEngine.currentPositionState(mock)
+                position = st.position
+                entryPrice = st.entryPrice
+                let live = realTimeQuote?.price ?? mock.last?.close ?? 0
+                if st.position != .none, st.entryPrice > 0 {
+                    pnl = live - st.entryPrice
+                    pnlPercent = st.entryPrice > 0 ? (live - st.entryPrice) / st.entryPrice * 100 : 0
+                } else {
+                    pnl = 0; pnlPercent = 0
+                }
             }
         }
         

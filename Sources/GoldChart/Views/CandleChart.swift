@@ -29,13 +29,17 @@ final class SignalBadgeOverlayView: UIView {
         // 口袋式：可见区最高/最低价自动标注（价格标签 + 横虚线）
         drawExtremeLabels(ctx: ctx, chart: chart, transformer: transformer)
         
-        for sig in vm.signalMarkers.filter({ $0.type.isEntry }).suffix(5) {
+        for sig in vm.signalMarkers.filter({ $0.type.isEntry || $0.type.isTakeProfit }).suffix(5) {
             guard sig.candleIndex < klines.count else { continue }
             let idx = sig.candleIndex
             // 多→最低点下方；空→最高点上方（偏移用固定像素 24pt，避免金价高位时偏移不可见）
             let anchorValue: Double
             let color: UIColor
-            if sig.type == .longOpen {
+            if sig.type.isTakeProfit {
+                // 止盈徽章：橙色，锚点在触发K线收盘价
+                anchorValue = klines[idx].close
+                color = UIColor(AppColors.gold)
+            } else if sig.type == .longOpen {
                 anchorValue = klines[idx].low
                 color = UIColor(AppColors.red)
             } else {
@@ -43,7 +47,7 @@ final class SignalBadgeOverlayView: UIView {
                 color = UIColor(AppColors.green)
             }
             let anchor = transformer.pixelForValues(x: Double(idx), y: anchorValue)
-            let badgeCenter = CGPoint(x: anchor.x, y: sig.type == .longOpen ? anchor.y - 24 : anchor.y + 24)
+            let badgeCenter = CGPoint(x: anchor.x, y: sig.type.isTakeProfit ? anchor.y - 24 : (sig.type == .longOpen ? anchor.y - 24 : anchor.y + 24))
             
             // 灰色垂直虚线：K线极值 → 徽章圆心
             ctx.saveGState()
