@@ -17,6 +17,11 @@ class ChartViewModel: ObservableObject {
     @Published var takeProfitLine: Double?
     /// build78：现价距止盈线的距离（相对，正值=还差这么多；负值/接近=马上触发）
     @Published var distanceToTP: Double?
+    /// build79：信号驱动持仓的入场K线索引（实时信号建仓/反手时记录，供止盈线计算）
+    private var entryIndex: Int = 60
+    /// build79：止盈平仓时的K线索引与方向（防止同信号反复触发止盈再建仓）
+    private var lastTpCandle: Int = -1
+    private var lastTpDir: PositionDirection = .none
     
     // 实时行情
     @Published var realTimeQuote: RealTimeQuote?
@@ -172,27 +177,64 @@ class ChartViewModel: ObservableObject {
     }
     
     /// 实时更新复合评分（每次即时报价变化时重算）
+    /// build79：信号驱动的持仓跟踪——图上出「多/空」信号即建仓，价格到移动止盈线弹「盈」
     private func recalcComposite() {
         compositeSignal = SignalEngine.composite(realtimeKlines)
         // 实时信号：达到阈值时添加/替换最后一根K线的信号
         guard realtimeKlines.count >= 60 else { return }
         let live = realTimeQuote?.price ?? realtimeKlines.last?.close ?? 0
-        let (marker, score) = SignalEngine.realtimeSignal(realtimeKlines, livePrice: realTimeQuote?.price)
+        let (marker, _) = SignalEngine.realtimeSignal(realtimeKlines, livePrice: realTimeQuote?.price)
         
-        // 更新当前持仓状态（引擎模拟）：供实时止盈提醒使用
-        let st = SignalEngine.currentPositionState(realtimeKlines)
-        position = st.position
-        entryPrice = st.entryPrice
-        if st.position != .none, entryPrice > 0 {
+        let currentMarkers = signalMarkers
+        // 移除同一根K线上的实时信号/止盈，避免重复
+        var filtered = currentMarkers.filter { $0.source != "实时信号" && $0.source != "实时止盈" || $0.candleIndex < realtimeKlines.count - 1 }
+        
+        // ── 信号驱动持仓（build79 核心修复）──
+        // 信号出「多/空」→ 建仓/反手；同向信号不追价重置（避免兜圈到不了止盈线）
+        if let m = marker {
+            filtered.append(m)
+            let incoming: PositionDirection? = m.type == .longOpen ? .long : (m.type == .shortOpen ? .short : nil)
+            if let dir = incoming {
+                // 止盈刚平仓的同一根K线内，同方向信号不立即重建（防反复弹「盈」）
+                let sameCandleReclose = position == .none && dir == lastTpDir && lastTpCandle == realtimeKlines.count - 1
+                if !sameCandleReclose, (position == .none || position != dir) {
+                    position = dir
+                    entryPrice = live
+                    entryIndex = max(60, realtimeKlines.count - 1)
+                }
+            }
+        } else if position == .none {
+            // 无新信号且空仓 → 历史回放兜底（延续 refresh 时的状态）
+            let st = SignalEngine.currentPositionState(realtimeKlines)
+            position = st.position
+            entryPrice = st.entryPrice
+            entryIndex = st.entryIndex
+        }
+        
+        // ── 持仓中：止盈线实时计算 + 触线弹「盈」并平仓（等下一个信号再建仓）──
+        if position != .none, entryPrice > 0, live > 0,
+           let tp = SignalEngine.realtimeTakeProfit(
+               realtimeKlines, position: position, entryPrice: entryPrice,
+               livePrice: live, entryIndex: entryIndex
+           ) {
+            filtered.append(tp)
+            lastTpCandle = realtimeKlines.count - 1
+            lastTpDir = position
+            position = .none
+            entryPrice = 0
+            pnl = 0
+            pnlPercent = 0
+            takeProfitLine = nil
+            distanceToTP = nil
+        } else if position != .none, entryPrice > 0 {
             pnl = live - entryPrice
             pnlPercent = entryPrice > 0 ? (live - entryPrice) / entryPrice * 100 : 0
-            // build78：止盈线 + 距触发距离（实时更新）
             takeProfitLine = SignalEngine.currentTakeProfitLine(
-                realtimeKlines, position: st.position, entryPrice: st.entryPrice,
-                entryIndex: st.entryIndex, livePrice: live
+                realtimeKlines, position: position, entryPrice: entryPrice,
+                entryIndex: entryIndex, livePrice: live
             )
             if let tp = takeProfitLine {
-                distanceToTP = st.position == .long ? tp - live : live - tp
+                distanceToTP = position == .long ? tp - live : live - tp
             } else {
                 distanceToTP = nil
             }
@@ -201,23 +243,6 @@ class ChartViewModel: ObservableObject {
             pnlPercent = 0
             takeProfitLine = nil
             distanceToTP = nil
-        }
-        _ = score
-        
-        let currentMarkers = signalMarkers
-        // 移除同一根K线上的实时信号，避免重复
-        var filtered = currentMarkers.filter { $0.source != "实时信号" && $0.source != "实时止盈" || $0.candleIndex < realtimeKlines.count - 1 }
-        if let m = marker {
-            filtered.append(m)
-        }
-        // 实时止盈提醒：持仓中价格回撤/反弹到 2×ATR 移动止盈线 → 加“盈”
-        if st.position != .none, live > 0 {
-            if let tp = SignalEngine.realtimeTakeProfit(
-                realtimeKlines, position: st.position, entryPrice: st.entryPrice,
-                livePrice: live, entryIndex: st.entryIndex
-            ) {
-                filtered.append(tp)
-            }
         }
         signalMarkers = filtered
     }
@@ -306,6 +331,9 @@ class ChartViewModel: ObservableObject {
                 let st = SignalEngine.currentPositionState(fetched)
                 position = st.position
                 entryPrice = st.entryPrice
+                entryIndex = st.entryIndex
+                lastTpCandle = -1
+                lastTpDir = .none
                 let live = realTimeQuote?.price ?? fetched.last?.close ?? 0
                 if st.position != .none, st.entryPrice > 0 {
                     pnl = live - st.entryPrice
@@ -343,6 +371,9 @@ class ChartViewModel: ObservableObject {
                 let st = SignalEngine.currentPositionState(mock)
                 position = st.position
                 entryPrice = st.entryPrice
+                entryIndex = st.entryIndex
+                lastTpCandle = -1
+                lastTpDir = .none
                 let live = realTimeQuote?.price ?? mock.last?.close ?? 0
                 if st.position != .none, st.entryPrice > 0 {
                     pnl = live - st.entryPrice
