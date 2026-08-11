@@ -22,6 +22,8 @@ class ChartViewModel: ObservableObject {
     /// build79：止盈平仓时的K线索引与方向（防止同信号反复触发止盈再建仓）
     private var lastTpCandle: Int = -1
     private var lastTpDir: PositionDirection = .none
+    /// build80：0.5×ATR 利润提醒去重——同一持仓周期只弹一次（弹过记 true，平仓/换方向重置）
+    private var profitAlertFired: Bool = false
     
     // 实时行情
     @Published var realTimeQuote: RealTimeQuote?
@@ -201,6 +203,7 @@ class ChartViewModel: ObservableObject {
                     position = dir
                     entryPrice = live
                     entryIndex = max(60, realtimeKlines.count - 1)
+                    profitAlertFired = false   // build80：新持仓周期重置提醒去重
                 }
             }
         } else if position == .none {
@@ -226,9 +229,28 @@ class ChartViewModel: ObservableObject {
             pnlPercent = 0
             takeProfitLine = nil
             distanceToTP = nil
+            profitAlertFired = false
         } else if position != .none, entryPrice > 0 {
             pnl = live - entryPrice
             pnlPercent = entryPrice > 0 ? (live - entryPrice) / entryPrice * 100 : 0
+            // build80：0.5×ATR 利润提醒（只弹一次，不平仓）
+            if !profitAlertFired,
+               let alertLine = SignalEngine.realtimeProfitAlert(
+                   realtimeKlines, position: position, entryPrice: entryPrice,
+                   livePrice: live, entryIndex: entryIndex
+               ) {
+                profitAlertFired = true
+                let alertMarker = SignalMarker(
+                    candleIndex: realtimeKlines.count - 1,
+                    type: position == .long ? .longTakeProfit : .shortTakeProfit,
+                    price: live,
+                    stopLoss: entryPrice,
+                    stopTarget: alertLine,
+                    strength: 75, source: "利润提醒", timestamp: realtimeKlines.last?.timestamp ?? 0
+                )
+                filtered.append(alertMarker)
+            }
+            // 状态栏/图上始终显示 2×ATR 真实平仓线（不能被 0.5×ATR 提醒线覆盖）
             takeProfitLine = SignalEngine.currentTakeProfitLine(
                 realtimeKlines, position: position, entryPrice: entryPrice,
                 entryIndex: entryIndex, livePrice: live
@@ -334,6 +356,7 @@ class ChartViewModel: ObservableObject {
                 entryIndex = st.entryIndex
                 lastTpCandle = -1
                 lastTpDir = .none
+                profitAlertFired = false
                 let live = realTimeQuote?.price ?? fetched.last?.close ?? 0
                 if st.position != .none, st.entryPrice > 0 {
                     pnl = live - st.entryPrice
@@ -374,6 +397,7 @@ class ChartViewModel: ObservableObject {
                 entryIndex = st.entryIndex
                 lastTpCandle = -1
                 lastTpDir = .none
+                profitAlertFired = false
                 let live = realTimeQuote?.price ?? mock.last?.close ?? 0
                 if st.position != .none, st.entryPrice > 0 {
                     pnl = live - st.entryPrice

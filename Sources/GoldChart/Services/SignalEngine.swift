@@ -14,7 +14,8 @@ class SignalEngine {
         var longThreshold: Int = 18        // 评分 ≥ 18 做多
         var shortThreshold: Int = -18      // 评分 ≤ -18 做空
         var chandelierATR: Double = 3.0    // 吊灯止损 ATR 倍数
-        var trailATR: Double = 2.0         // 移动止盈 ATR 倍数
+        var trailATR: Double = 2.0         // 移动止盈 ATR 倍数（平仓）
+        var profitAlertATR: Double = 0.5   // 利润提醒 ATR 倍数（只提醒不平仓，build80）
         var adxMin: Double = 20.0          // ADX 过滤（开仓）
         var useBreakEven: Bool = false     // 保本开关（回测 BE0 → false）
 
@@ -462,6 +463,43 @@ class SignalEngine {
             lowest = min(lowest, lp)
             let line = lowest + config.trailATR * a
             return line > lowest ? line : nil
+        case .none:
+            return nil
+        }
+    }
+
+    // MARK: - 利润提醒（build80：0.5×ATR 回撤/反弹，只提醒不平仓）
+    /// 多单：现价从持仓最高点回撤 ≥ profitAlertATR×ATR → 返回提醒线价格（不自动平仓）
+    /// 空单：现价从持仓最低点反弹 ≥ profitAlertATR×ATR → 返回提醒线价格
+    /// 返回 nil 表示未触发。去重在 ViewModel 侧：一个持仓周期只弹一次。
+    static func realtimeProfitAlert(
+        _ data: [Kline],
+        position: PositionDirection,
+        entryPrice: Double,
+        livePrice: Double,
+        entryIndex: Int? = nil
+    ) -> Double? {
+        guard position != .none, entryPrice > 0 else { return nil }
+        guard data.count >= 60, data.count > (entryIndex ?? 60) else { return nil }
+        let pre = precompute(data)
+        let a = pre.atr[data.count - 1]
+        guard a > 0 else { return nil }
+        let startIdx = max(60, entryIndex ?? 60)
+        guard startIdx < data.count else { return nil }
+
+        switch position {
+        case .long:
+            var highest = entryPrice
+            for i in startIdx..<data.count { highest = max(highest, data[i].high) }
+            highest = max(highest, livePrice)
+            let alertLine = highest - config.profitAlertATR * a
+            return (livePrice <= alertLine && alertLine < highest) ? alertLine : nil
+        case .short:
+            var lowest = entryPrice
+            for i in startIdx..<data.count { lowest = min(lowest, data[i].low) }
+            lowest = min(lowest, livePrice)
+            let alertLine = lowest + config.profitAlertATR * a
+            return (livePrice >= alertLine && alertLine > lowest) ? alertLine : nil
         case .none:
             return nil
         }
