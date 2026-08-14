@@ -5,7 +5,7 @@ import Foundation
 //   信号：趋势组共振（M001+M002+M005+M023）做主信号 ≥ +20
 //         动量组共振（M010 MACD柱 + M011 RSI + M012 KDJ + M014 CCI）做确认闸门
 //         gate_trmo_1：确认组净票合计≥1（趋势+动量双确认）才开仓
-//   出场：吊灯 3×ATR 与 移动止盈 max(入场-3ATR, 持仓最高-2.5×ATR)（保本关 BE0）
+//   出场：吊灯 2×ATR 与 移动止盈 max(入场-2ATR, 持仓最高-3×ATR)（保本关 BE0，WF+466.7% 7窗全正）
 //   成交：止损用最低价触线（matrix single_daily_rets l[i]<=stop 逻辑）
 // 算法与 /tmp/bt/matrix_engine.py + matrix_mp.py 1:1 对齐
 class StockSignalEngine {
@@ -13,7 +13,7 @@ class StockSignalEngine {
     // MARK: - 配置（矩阵回测定稿参数）
     struct Config {
         var longThreshold: Int = 20        // 评分 ≥ 20 开多
-        var chandelierATR: Double = 3.0    // 吊灯止损 ATR 倍数
+        var chandelierATR: Double = 2.0    // 吊灯止损 ATR 倍数（WF最优 ch2.0）
         var trailATR: Double = 2.5         // 移动止盈 ATR 倍数
         var useBreakEven: Bool = false     // 保本开关（回测 BE0 → false）
         var minAbs: Double = 25.0          // 共振计数阈值（|指标分|≥25 算一票）
