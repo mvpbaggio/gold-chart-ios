@@ -1,10 +1,10 @@
 import Foundation
 
-// MARK: - A股信号引擎 v2（矩阵回测定稿 · 2026-08-09）
-// 回测基准（474 只 × 严格7窗样本外 +397%、7窗全正；全样本 +587% 回撤-21%）：
-//   信号：趋势组共振（M001趋势共振 + M002波段王 + M005智能均线 + M023多周期共振）
-//         共振计数：|指标分|≥25 计 1 票，同向票数/4×100 → -100~+100
-//   开仓：评分 ≥ +20 开多（只做多）
+// MARK: - A股信号引擎 v3（gate_trmo 双确认 · 2026-08-14）
+// 回测基准（474 只 × 严格7窗样本外 +456%、7窗全正；全样本 +612% 回撤-18%）
+//   信号：趋势组共振（M001+M002+M005+M023）做主信号 ≥ +20
+//         动量组共振（M010 MACD柱 + M011 RSI + M012 KDJ + M014 CCI）做确认闸门
+//         gate_trmo_1：确认组净票合计≥1（趋势+动量双确认）才开仓
 //   出场：吊灯 3×ATR 与 移动止盈 max(入场-3ATR, 持仓最高-2.5×ATR)（保本关 BE0）
 //   成交：止损用最低价触线（matrix single_daily_rets l[i]<=stop 逻辑）
 // 算法与 /tmp/bt/matrix_engine.py + matrix_mp.py 1:1 对齐
@@ -37,6 +37,12 @@ class StockSignalEngine {
         let wk5: [Double]        // 周线近似 = sma(close,5)
         let ma5Slope: [Double]   // np.gradient(ma5)
         let ema20Slope: [Double] // np.gradient(ema20)
+        // 动量组所需（gate_trmo 双确认）
+        let macdHist: [Double]   // MACD 柱 (DIF-DEA)
+        let rsi: [Double]        // RSI(14)
+        let k: [Double]          // KDJ K
+        let d: [Double]          // KDJ D
+        let cci: [Double]        // CCI(14)
     }
 
     private static func sma(_ vals: [Double], _ p: Int) -> [Double] {
@@ -138,9 +144,68 @@ class StockSignalEngine {
         let ma5Slope = gradient(ma5)
         let ema20Slope = gradient(ema20)
 
+        // ═══ 动量组字段（gate_trmo 双确认需要）═══
+        // MACD(12,26,9)：与 optimize.macd 1:1（ema 种子=首根close）
+        let ema12 = emaRec(closes, 12)
+        let ema26 = emaRec(closes, 26)
+        var dif = [Double](repeating: 0, count: n)
+        for i in 0..<n { dif[i] = ema12[i] - ema26[i] }
+        let dea = emaRec(dif, 9)
+        var macdHist = [Double](repeating: 0, count: n)
+        for i in 0..<n { macdHist[i] = dif[i] - dea[i] }
+
+        // RSI(14)：与 optimize.rsi 1:1（SMA of gains/losses, 首 p 根 NaN→0）
+        var rsi = [Double](repeating: 0, count: n)
+        for i in 14..<n {
+            var gsum = 0.0, lsum = 0.0
+            for j in (i - 13)...i {
+                let ch = closes[j] - closes[j - 1]
+                if ch > 0 { gsum += ch } else { lsum += -ch }
+            }
+            let ag = gsum / 14.0, al = lsum / 14.0
+            rsi[i] = al == 0 ? 100.0 : 100.0 - 100.0 / (1.0 + ag / al)
+        }
+
+        // KDJ(9)：与 optimize.kdj 1:1（k,d 种子 50，递归平滑）
+        var kArr = [Double](repeating: 50.0, count: n)
+        var dArr = [Double](repeating: 50.0, count: n)
+        var prevK = 50.0, prevD = 50.0
+        for i in 0..<n {
+            let lo0 = max(0, i - 8)
+            var lo = Double.greatestFiniteMagnitude, hi = -Double.greatestFiniteMagnitude
+            for j in lo0...i {
+                lo = min(lo, data[j].low)
+                hi = max(hi, data[j].high)
+            }
+            let rsv = hi == lo ? 50.0 : (data[i].close - lo) / (hi - lo) * 100.0
+            let k = prevK * 2.0 / 3.0 + rsv / 3.0
+            let d = prevD * 2.0 / 3.0 + k / 3.0
+            kArr[i] = k; dArr[i] = d
+            prevK = k; prevD = d
+        }
+
+        // CCI(14)：与 compute_indicators 1:1（tp=(h+l+c)/3, md=平均绝对偏差）
+        var cci = [Double](repeating: 0, count: n)
+        for i in 13..<n {
+            var tpSum = 0.0
+            var tps = [Double](repeating: 0, count: 14)
+            for j in 0..<14 {
+                let idx = i - 13 + j
+                tps[j] = (data[idx].high + data[idx].low + data[idx].close) / 3.0
+                tpSum += tps[j]
+            }
+            let smaTp = tpSum / 14.0
+            var md = 0.0
+            for j in 0..<14 { md += abs(tps[j] - smaTp) }
+            md /= 14.0
+            let tp = (data[i].high + data[i].low + data[i].close) / 3.0
+            cci[i] = md > 0 ? (tp - smaTp) / (0.015 * md) : 0
+        }
+
         return Pre(closes: closes, ma5: ma5, ma10: ma10, ma20: ma20, ema20: ema20,
                    hh20: hh20, ll20: ll20, atr: atr, vr: vr, wk5: wk5,
-                   ma5Slope: ma5Slope, ema20Slope: ema20Slope)
+                   ma5Slope: ma5Slope, ema20Slope: ema20Slope,
+                   macdHist: macdHist, rsi: rsi, k: kArr, d: dArr, cci: cci)
     }
 
     // MARK: - M001 趋势共振（sig_m001）
@@ -199,6 +264,77 @@ class StockSignalEngine {
         return max(-100, min(100, s))
     }
 
+    // MARK: - M010 MACD柱（sig_m010）
+    private static func sigM010(_ pre: Pre, _ i: Int) -> Double {
+        let h = pre.macdHist[i]
+        let ph = i > 0 ? pre.macdHist[i - 1] : 0
+        var s = 0.0
+        let gc = h > 0 && ph <= 0
+        let dc = h < 0 && ph >= 0
+        if gc { s += 50 } else if dc { s -= 50 }
+        if h > 0 { s += 20 } else if h < 0 { s -= 20 }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - M011 RSI（sig_m011）
+    private static func sigM011(_ pre: Pre, _ i: Int) -> Double {
+        let r = pre.rsi[i]
+        var s = 0.0
+        if r < 30 { s += 50 } else if r < 45 { s += 20 }
+        if r > 70 { s -= 50 } else if r > 55 { s -= 20 }
+        if i >= 1 {
+            let pr = pre.rsi[i - 1]
+            if r > pr && r < 40 { s += 30 }
+            if r < pr && r > 60 { s -= 30 }
+        }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - M012 KDJ（sig_m012）
+    private static func sigM012(_ pre: Pre, _ i: Int) -> Double {
+        let k = pre.k[i], d = pre.d[i]
+        let k1 = i > 0 ? pre.k[i - 1] : 0
+        let d1 = i > 0 ? pre.d[i - 1] : 0
+        var s = 0.0
+        let gcLo = (k > d) && (k1 <= d1) && (k < 30)
+        let dcHi = (k < d) && (k1 >= d1) && (k > 70)
+        if gcLo { s += 70 } else if (k > d) && !gcLo { s += 30 }
+        if dcHi { s -= 70 } else if (k < d) && !dcHi { s -= 30 }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - M014 CCI（sig_m014）
+    private static func sigM014(_ pre: Pre, _ i: Int) -> Double {
+        let c = pre.cci[i]
+        var s = 0.0
+        if c < -100 { s += 50 } else if c < -50 { s += 20 }
+        if c > 100 { s -= 50 } else if c > 50 { s -= 20 }
+        if i >= 1 {
+            let pc = pre.cci[i - 1]
+            if c > pc && c < -80 { s += 30 }
+            if c < pc && c > 80 { s -= 30 }
+        }
+        return max(-100, min(100, s))
+    }
+
+    // MARK: - 动量组共振分（M010+M011+M012+M014，min_abs=25）
+    static func momentumScores(_ data: [Kline]) -> [Double] {
+        guard data.count >= 60 else { return [] }
+        let pre = precompute(data)
+        let n = data.count
+        var out = [Double](repeating: 0, count: n)
+        for i in 0..<n {
+            var pos = 0.0, neg = 0.0
+            let scores: [Double] = [sigM010(pre, i), sigM011(pre, i), sigM012(pre, i), sigM014(pre, i)]
+            for v in scores {
+                if v >= config.minAbs { pos += 1 }
+                else if v <= -config.minAbs { neg += 1 }
+            }
+            out[i] = (pos - neg) / 4.0 * 100.0
+        }
+        return out
+    }
+
     // MARK: - 趋势组共振评分（group_score：趋势组 4 指标，min_abs=25）
     static func makeScores(_ data: [Kline]) -> [Double] {
         guard data.count >= 60 else { return [] }
@@ -245,11 +381,22 @@ class StockSignalEngine {
     // MARK: - 逐根K线历史信号（matrix single_daily_rets 逻辑 · 只做多）
     /// 开仓：评分 ≥ +20；止损线 = max(入场-3ATR, 持仓最高-2.5×ATR)（BE0 不启用保本）
     /// 出场：最低价 ≤ 止损线（触线成交，与回测 l[i]<=stop 一致）
+    // MARK: - gate_trmo_1 双确认闸门（与回测 sig_gate 1:1）
+    /// 趋势组评分≥20（主信号，隐含趋势组净票≥1）且 确认组净票合计≥1
+    /// 确认组 = 趋势组+动量组：各组成员 |指标分|≥minAbs 计 1 票，净票 = 多票-空票
+    /// 因 group_score 输出恒为 25 的倍数 → 净票 = Int(评分/25)
+    private static func gateTrmoPass(trendScore: Double, momentumScore: Double) -> Bool {
+        let trNet = Int(trendScore / config.minAbs)      // 趋势组净票（≥20 时 ≥1）
+        let moNet = Int(momentumScore / config.minAbs)   // 动量组净票
+        return trendScore >= Double(config.longThreshold) && (trNet + moNet) >= 1
+    }
+
     static func perCandleSignals(_ data: [Kline]) -> [SignalMarker] {
         guard data.count >= 60 else { return [] }
         let pre = precompute(data)
         let scores = makeScores(data)
-        guard scores.count == data.count else { return [] }
+        let mScores = momentumScores(data)
+        guard scores.count == data.count, mScores.count == data.count else { return [] }
 
         var signals: [SignalMarker] = []
         var inPosition = false
@@ -279,12 +426,13 @@ class StockSignalEngine {
                     inPosition = false
                 }
             } else {
-                if sc >= Double(config.longThreshold) {
+                // gate_trmo_1：趋势+动量双确认（净票合计≥1）
+                if gateTrmoPass(trendScore: sc, momentumScore: mScores[i]) {
                     signals.append(SignalMarker(
                         candleIndex: i, type: .longOpen, price: candle.close,
                         stopLoss: candle.low - config.chandelierATR * a, stopTarget: nil,
                         strength: min(Int(sc.rounded()), 100),
-                        source: "趋势共振", timestamp: candle.timestamp
+                        source: "趋势+动量共振", timestamp: candle.timestamp
                     ))
                     inPosition = true; entry = candle.close; highest = candle.high
                 }
@@ -310,7 +458,16 @@ class StockSignalEngine {
         let score = Int(max(-100, min(100, total.rounded())))
         let close = livePrice ?? last.close
 
-        guard total >= Double(config.longThreshold) else { return (nil, score) }
+        // gate_trmo_1：趋势+动量双确认（净票合计≥1）
+        let m10 = sigM010(pre, i), m11 = sigM011(pre, i), m12 = sigM012(pre, i), m14 = sigM014(pre, i)
+        var mpos = 0.0, mneg = 0.0
+        for v in [m10, m11, m12, m14] {
+            if v >= config.minAbs { mpos += 1 }
+            else if v <= -config.minAbs { mneg += 1 }
+        }
+        let mTotal = (mpos - mneg) / 4.0 * 100.0
+
+        guard gateTrmoPass(trendScore: total, momentumScore: mTotal) else { return (nil, score) }
 
         let a = pre.atr[i] > 0 ? pre.atr[i] : 0
         let sl = last.low - config.chandelierATR * a
